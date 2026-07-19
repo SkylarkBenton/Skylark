@@ -255,6 +255,9 @@
       <button class="btn danger hidden" id="deleteBtn" onclick="deleteBooking()">Delete</button>
       <button class="btn primary" onclick="saveBooking()">Save Booking</button>
     </div>
+    <div class="sheet-actions" id="emailActions" style="margin-top:8px;">
+      <button class="btn ghost hidden" id="sendConfirmBtn" onclick="sendConfirmationEmail()">Send Confirmation Email</button>
+    </div>
   </div>
 </div>
 
@@ -412,6 +415,9 @@
     document.getElementById('f_method').value = booking ? (booking.payment_method||'') : '';
     document.getElementById('f_paystatus').value = booking ? booking.payment_status : 'unpaid';
     document.getElementById('f_notes').value = booking ? (booking.notes||'') : '';
+
+    const canEmail = booking && booking.customer_email && booking.source !== 'airbnb';
+    document.getElementById('sendConfirmBtn').classList.toggle('hidden', !canEmail);
   }
   function closeModal(){
     document.getElementById('bookingOverlay').classList.remove('open');
@@ -461,6 +467,22 @@
     if(error){ alert('Could not delete: ' + error.message); return; }
     closeModal();
     renderCalendar();
+  }
+
+  async function sendConfirmationEmail(){
+    const id = document.getElementById('bookingId').value;
+    if(!id) return;
+    const btn = document.getElementById('sendConfirmBtn');
+    const originalText = btn.textContent;
+    btn.textContent = 'Sending...';
+    btn.disabled = true;
+    const { data, error } = await sb.functions.invoke('send-booking-email', {
+      body: { bookingId: id, emailType: 'confirmation' }
+    });
+    btn.disabled = false;
+    btn.textContent = originalText;
+    if(error){ alert('Could not send: ' + error.message); return; }
+    alert('Confirmation email sent.');
   }
 
   checkSession();
