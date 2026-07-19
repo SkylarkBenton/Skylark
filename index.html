@@ -438,7 +438,7 @@
   async function deleteBooking(){
     const id = document.getElementById('bookingId').value;
     if(!id) return;
-    if(!confirm('Delete this booking? This can\\'t be undone.')) return;
+    if(!confirm('Delete this booking? This cannot be undone.')) return;
     const { error } = await sb.from('bookings').delete().eq('id', id);
     if(error){ alert('Could not delete: ' + error.message); return; }
     closeModal();
