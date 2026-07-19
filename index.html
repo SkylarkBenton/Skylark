@@ -204,11 +204,6 @@
       </div>
     </div>
 
-    <div class="row2">
-      <div class="field"><label>Start Time</label><input type="time" id="f_start"></div>
-      <div class="field"><label>End Time</label><input type="time" id="f_end"></div>
-    </div>
-
     <div class="field"><label>Customer Name</label><input type="text" id="f_name" placeholder="Jane Doe"></div>
 
     <div class="row2">
@@ -402,8 +397,6 @@
     document.getElementById('f_date').value = booking ? booking.event_date : (defaultDate || todayISO());
     document.getElementById('f_end_date').value = booking ? (booking.end_date || booking.event_date) : (defaultDate || todayISO());
     document.getElementById('f_source').value = booking ? booking.source : 'private';
-    document.getElementById('f_start').value = booking ? (booking.start_time||'') : '';
-    document.getElementById('f_end').value = booking ? (booking.end_time||'') : '';
     document.getElementById('f_name').value = booking ? (booking.customer_name||'') : '';
     document.getElementById('f_phone').value = booking ? (booking.customer_phone||'') : '';
     document.getElementById('f_email').value = booking ? (booking.customer_email||'') : '';
@@ -431,8 +424,6 @@
       event_date: startDate,
       end_date: (endDateInput && endDateInput >= startDate) ? endDateInput : startDate,
       source: document.getElementById('f_source').value,
-      start_time: document.getElementById('f_start').value || null,
-      end_time: document.getElementById('f_end').value || null,
       customer_name: document.getElementById('f_name').value || null,
       customer_phone: document.getElementById('f_phone').value || null,
       customer_email: document.getElementById('f_email').value || null,
