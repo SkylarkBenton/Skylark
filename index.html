@@ -192,8 +192,9 @@
     <h3 id="modalTitle">New Booking</h3>
     <input type="hidden" id="bookingId">
 
-    <div class="row2">
+    <div class="row3">
       <div class="field"><label>Date</label><input type="date" id="f_date"></div>
+      <div class="field"><label>End Date</label><input type="date" id="f_end_date"></div>
       <div class="field"><label>Source</label>
         <select id="f_source">
           <option value="private">Private</option>
@@ -313,10 +314,13 @@
     const monthStart = `${currentYear}-${String(currentMonth+1).padStart(2,'0')}-01`;
     const monthEnd = `${currentYear}-${String(currentMonth+1).padStart(2,'0')}-${String(daysInMonth).padStart(2,'0')}`;
 
+    // Overlap query: a booking counts if it starts before month end
+    // AND ends on/after month start (catches multi-night stays that
+    // started last month or run into next month).
     const { data, error } = await sb.from('bookings')
       .select('*')
-      .gte('event_date', monthStart)
       .lte('event_date', monthEnd)
+      .or(`end_date.gte.${monthStart},end_date.is.null`)
       .neq('status','cancelled')
       .order('event_date');
 
@@ -327,7 +331,10 @@
 
     for(let day=1; day<=daysInMonth; day++){
       const dateStr = `${currentYear}-${String(currentMonth+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-      const dayBookings = bookingsCache.filter(b => b.event_date === dateStr);
+      const dayBookings = bookingsCache.filter(b => {
+        const end = b.end_date || b.event_date;
+        return dateStr >= b.event_date && dateStr <= end;
+      });
       const isToday = dateStr === todayISO();
       const dots = dayBookings.map(b => `<span class="dot ${b.source}"></span>`).join('');
       html += `<div class="cal-day ${isToday?'today':''}" onclick="handleDayClick('${dateStr}')">
@@ -340,7 +347,10 @@
   }
 
   function handleDayClick(dateStr){
-    const existing = bookingsCache.filter(b => b.event_date === dateStr);
+    const existing = bookingsCache.filter(b => {
+      const end = b.end_date || b.event_date;
+      return dateStr >= b.event_date && dateStr <= end;
+    });
     if(existing.length === 1){ openBookingModal(existing[0]); }
     else if(existing.length > 1){ openBookingModal(existing[0]); }
     else { openBookingModal(null, dateStr); }
@@ -361,7 +371,11 @@
     }
     list.innerHTML = data.map(b => {
       const d = new Date(b.event_date + 'T00:00:00');
-      const dateLabel = d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+      let dateLabel = d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+      if(b.end_date && b.end_date !== b.event_date){
+        const dEnd = new Date(b.end_date + 'T00:00:00');
+        dateLabel += ' – ' + dEnd.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+      }
       const sourceLabel = b.source.charAt(0).toUpperCase()+b.source.slice(1);
       return `<div class="booking-row" onclick='openBookingModal(${JSON.stringify(b)})'>
         <div class="b-left">
@@ -383,6 +397,7 @@
     document.getElementById('modalTitle').textContent = booking ? 'Edit Booking' : 'New Booking';
     document.getElementById('bookingId').value = booking ? booking.id : '';
     document.getElementById('f_date').value = booking ? booking.event_date : (defaultDate || todayISO());
+    document.getElementById('f_end_date').value = booking ? (booking.end_date || booking.event_date) : (defaultDate || todayISO());
     document.getElementById('f_source').value = booking ? booking.source : 'private';
     document.getElementById('f_start').value = booking ? (booking.start_time||'') : '';
     document.getElementById('f_end').value = booking ? (booking.end_time||'') : '';
@@ -404,8 +419,11 @@
 
   async function saveBooking(){
     const id = document.getElementById('bookingId').value;
+    const startDate = document.getElementById('f_date').value;
+    const endDateInput = document.getElementById('f_end_date').value;
     const payload = {
-      event_date: document.getElementById('f_date').value,
+      event_date: startDate,
+      end_date: (endDateInput && endDateInput >= startDate) ? endDateInput : startDate,
       source: document.getElementById('f_source').value,
       start_time: document.getElementById('f_start').value || null,
       end_time: document.getElementById('f_end').value || null,
