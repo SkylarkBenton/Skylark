@@ -181,6 +181,9 @@
 
   <div class="section-title">Upcoming Bookings</div>
   <div id="upcomingList"></div>
+
+  <div class="section-title">New Inquiries</div>
+  <div id="inquiriesList"></div>
 </div>
 
 <button class="fab hidden" id="fabAdd" onclick="openBookingModal(null, todayISO())">+</button>
@@ -289,6 +292,7 @@
     document.getElementById('app').classList.remove('hidden');
     document.getElementById('fabAdd').classList.remove('hidden');
     renderCalendar();
+    renderInquiries();
   }
 
   // ---- CALENDAR ----
@@ -414,6 +418,7 @@
   }
   function closeModal(){
     document.getElementById('bookingOverlay').classList.remove('open');
+    pendingInquiryId = null;
   }
 
   async function saveBooking(){
@@ -443,11 +448,17 @@
     if(id){
       ({ error } = await sb.from('bookings').update(payload).eq('id', id));
     } else {
-      ({ error } = await sb.from('bookings').insert(payload));
+      const { data: inserted, error: insertErr } = await sb.from('bookings').insert(payload).select().single();
+      error = insertErr;
+      if(!error && pendingInquiryId){
+        await sb.from('inquiries').update({ status: 'converted', converted_booking_id: inserted.id }).eq('id', pendingInquiryId);
+        pendingInquiryId = null;
+      }
     }
     if(error){ alert('Could not save: ' + error.message); return; }
     closeModal();
     renderCalendar();
+    renderInquiries();
   }
 
   async function deleteBooking(){
@@ -474,6 +485,56 @@
     btn.textContent = originalText;
     if(error){ alert('Could not send: ' + error.message); return; }
     alert('Confirmation email sent.');
+  }
+
+  // ---- INQUIRIES ----
+  let pendingInquiryId = null;
+
+  async function renderInquiries(){
+    const { data } = await sb.from('inquiries')
+      .select('*')
+      .eq('status', 'new')
+      .order('created_at', { ascending: false });
+
+    const list = document.getElementById('inquiriesList');
+    if(!data || data.length === 0){
+      list.innerHTML = `<div class="empty-state">No new inquiries.</div>`;
+      return;
+    }
+    list.innerHTML = data.map(inq => {
+      const dateLabel = inq.requested_date ? new Date(inq.requested_date + 'T00:00:00').toLocaleDateString('en-US', {month:'short', day:'numeric'}) : 'No date given';
+      return `<div class="booking-row" style="cursor:default;">
+        <div class="b-left">
+          <div class="b-date">${dateLabel}</div>
+          <div>
+            <div class="b-name">${inq.name}</div>
+            <div class="b-sub">${inq.event_type || ''}${inq.guest_count ? ' · '+inq.guest_count+' guests' : ''}${inq.phone ? ' · '+inq.phone : ''}${inq.email ? ' · '+inq.email : ''}</div>
+            ${inq.message ? `<div class="b-sub" style="margin-top:4px;font-style:italic;">"${inq.message}"</div>` : ''}
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn ghost" style="padding:8px 14px;font-size:12px;" onclick="dismissInquiry('${inq.id}')">Dismiss</button>
+          <button class="btn primary" style="padding:8px 14px;font-size:12px;" onclick='convertInquiry(${JSON.stringify(inq)})'>Convert</button>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  function convertInquiry(inq){
+    pendingInquiryId = inq.id;
+    openBookingModal(null, inq.requested_date || todayISO());
+    document.getElementById('f_source').value = 'website';
+    document.getElementById('f_name').value = inq.name || '';
+    document.getElementById('f_phone').value = inq.phone || '';
+    document.getElementById('f_email').value = inq.email || '';
+    document.getElementById('f_event').value = inq.event_type || '';
+    document.getElementById('f_guests').value = inq.guest_count || '';
+    document.getElementById('modalTitle').textContent = 'Convert Inquiry to Booking';
+  }
+
+  async function dismissInquiry(id){
+    await sb.from('inquiries').update({ status: 'closed' }).eq('id', id);
+    renderInquiries();
   }
 
   checkSession();
