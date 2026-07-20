@@ -165,7 +165,10 @@
         <small>Benton, LA · Booking Desk</small>
       </div>
     </div>
-    <button class="signout" onclick="doLogout()">Sign Out</button>
+    <div style="display:flex; gap:10px;">
+      <button class="signout" onclick="openSettingsModal()">Settings</button>
+      <button class="signout" onclick="doLogout()">Sign Out</button>
+    </div>
   </header>
 
   <div class="month-nav">
@@ -262,11 +265,47 @@
     <div class="sheet-actions" id="emailActions" style="margin-top:8px;">
       <button class="btn ghost hidden" id="sendConfirmBtn" onclick="sendConfirmationEmail()">Send Confirmation Email</button>
     </div>
+
+    <div id="agreementPanel" class="hidden" style="margin-top:20px; padding-top:16px; border-top:1px solid var(--line);">
+      <div style="font-size:11px; letter-spacing:0.5px; text-transform:uppercase; color:var(--muted); margin-bottom:10px;">Agreement &amp; Payment</div>
+      <div id="agreementStatus" style="font-size:13px; color:var(--cream); margin-bottom:12px; line-height:1.7;"></div>
+      <button class="btn ghost" id="sendAgreementBtn" onclick="sendAgreementLink()" style="margin-bottom:14px;">Send Agreement &amp; Payment Link</button>
+
+      <div id="damageSection" class="hidden">
+        <div style="font-size:11px; letter-spacing:0.5px; text-transform:uppercase; color:var(--muted); margin:16px 0 10px;">Flag Damage</div>
+        <div class="row2">
+          <div class="field"><label>Amount ($)</label><input type="number" id="damageAmount" step="0.01"></div>
+          <div class="field"><label>Description</label><input type="text" id="damageDescription" placeholder="What happened"></div>
+        </div>
+        <div class="sheet-actions">
+          <button class="btn ghost" onclick="sendDamageNotice()">Send Damage Notice</button>
+          <button class="btn danger" onclick="chargeForDamage()">Charge for Damage</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Settings modal -->
+<div class="overlay" id="settingsOverlay">
+  <div class="sheet">
+    <button class="close-x" onclick="closeSettingsModal()">✕</button>
+    <h3>Settings</h3>
+
+    <div class="field">
+      <label>Door Code</label>
+      <input type="text" id="s_door_code" placeholder="e.g. 4471">
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin-top:-8px;">This is sent automatically to guests once they sign their agreement and save a card. Changing it here only affects future auto-sent emails — remember to also update it on the physical lock.</p>
+
+    <div class="sheet-actions">
+      <button class="btn ghost" onclick="closeSettingsModal()">Cancel</button>
+      <button class="btn primary" onclick="saveSettings()">Save</button>
+    </div>
   </div>
 </div>
 
 <script>
-
   // ---- CONFIG ----
   const SUPABASE_URL = 'https://rywomhsgcaighcwnftoa.supabase.co';
   const SUPABASE_ANON_KEY = 'sb_publishable_2B_fjldZNj5TWYia1WMLnQ_GM4scyXg';
@@ -415,7 +454,10 @@
   }
 
   // ---- MODAL ----
+  let currentBookingData = null;
+
   function openBookingModal(booking, defaultDate){
+    currentBookingData = booking || null;
     document.getElementById('bookingOverlay').classList.add('open');
     document.getElementById('deleteBtn').classList.toggle('hidden', !booking);
     document.getElementById('modalTitle').textContent = booking ? 'Edit Booking' : 'New Booking';
@@ -437,10 +479,17 @@
 
     const canEmail = booking && booking.customer_email && booking.source !== 'airbnb';
     document.getElementById('sendConfirmBtn').classList.toggle('hidden', !canEmail);
+
+    const agreementPanel = document.getElementById('agreementPanel');
+    agreementPanel.classList.toggle('hidden', !canEmail);
+    if(canEmail){
+      renderAgreementStatus(booking);
+    }
   }
   function closeModal(){
     document.getElementById('bookingOverlay').classList.remove('open');
     pendingInquiryId = null;
+    currentBookingData = null;
   }
 
   async function saveBooking(){
@@ -557,6 +606,103 @@
   async function dismissInquiry(id){
     await sb.from('inquiries').update({ status: 'closed' }).eq('id', id);
     renderInquiries();
+  }
+
+  function renderAgreementStatus(booking){
+    const lines = [];
+    if(booking.agreement_signed_at){
+      lines.push('✓ Signed by ' + (booking.agreement_signed_name || booking.customer_name) + ' on ' + new Date(booking.agreement_signed_at).toLocaleDateString());
+    } else if(booking.agreement_sent_at){
+      lines.push('Sent ' + new Date(booking.agreement_sent_at).toLocaleDateString() + ' — awaiting signature');
+    } else {
+      lines.push('Not yet sent');
+    }
+    if(booking.stripe_payment_method_id){ lines.push('✓ Card on file'); }
+    if(booking.deposit_authorized_at){ lines.push('✓ Deposit hold placed ' + new Date(booking.deposit_authorized_at).toLocaleDateString()); }
+    if(booking.deposit_captured_at){ lines.push('✓ Deposit captured'); }
+    if(booking.balance_invoice_sent_at){ lines.push('✓ Balance invoice sent'); }
+    if(booking.damage_amount_cents){ lines.push('⚠ Damage flagged: $' + (booking.damage_amount_cents/100).toFixed(2)); }
+    document.getElementById('agreementStatus').innerHTML = lines.map(l => '<div>'+l+'</div>').join('');
+
+    const sendBtn = document.getElementById('sendAgreementBtn');
+    sendBtn.textContent = booking.agreement_signed_at ? 'Resend Not Needed — Already Signed' : (booking.agreement_sent_at ? 'Resend Agreement Link' : 'Send Agreement & Payment Link');
+    sendBtn.disabled = !!booking.agreement_signed_at;
+
+    document.getElementById('damageSection').classList.toggle('hidden', !booking.stripe_payment_method_id);
+    if(booking.damage_amount_cents){
+      document.getElementById('damageAmount').value = (booking.damage_amount_cents/100).toFixed(2);
+    }
+    if(booking.damage_description){
+      document.getElementById('damageDescription').value = booking.damage_description;
+    }
+  }
+
+  async function sendAgreementLink(){
+    if(!currentBookingData) return;
+    const btn = document.getElementById('sendAgreementBtn');
+    btn.disabled = true; btn.textContent = 'Sending...';
+    const { data, error } = await sb.functions.invoke('create-agreement-link', { body: { bookingId: currentBookingData.id } });
+    if(error || !data || data.error){
+      alert('Could not send: ' + (data?.error || error?.message || 'unknown error'));
+      btn.disabled = false; btn.textContent = 'Send Agreement & Payment Link';
+      return;
+    }
+    alert('Agreement link sent!');
+    closeModal();
+    renderCalendar();
+  }
+
+  async function sendDamageNotice(){
+    if(!currentBookingData) return;
+    const amountVal = document.getElementById('damageAmount').value;
+    const descVal = document.getElementById('damageDescription').value;
+    if(!amountVal || !descVal){ alert('Enter both an amount and a description first.'); return; }
+    const amountCents = Math.round(parseFloat(amountVal) * 100);
+
+    await sb.from('bookings').update({
+      damage_amount_cents: amountCents,
+      damage_description: descVal,
+      damage_notice_sent_at: new Date().toISOString(),
+    }).eq('id', currentBookingData.id);
+
+    const { error } = await sb.functions.invoke('send-booking-email', {
+      body: { bookingId: currentBookingData.id, emailType: 'damage_notice', damageAmountCents: amountCents, damageDescription: descVal }
+    });
+    if(error){ alert('Notice saved, but the email failed to send: ' + error.message); return; }
+    alert('Damage notice sent to guest.');
+    closeModal();
+    renderCalendar();
+  }
+
+  async function chargeForDamage(){
+    if(!currentBookingData) return;
+    if(!confirm('Charge the card on file for the flagged damage amount now?')) return;
+    const { data, error } = await sb.functions.invoke('charge-damage', { body: { bookingId: currentBookingData.id } });
+    if(error || !data || data.error){
+      alert('Could not charge: ' + (data?.error || error?.message || 'unknown error'));
+      return;
+    }
+    alert('Charged successfully.');
+    closeModal();
+    renderCalendar();
+  }
+
+  async function openSettingsModal(){
+    const { data } = await sb.from('settings').select('value').eq('key', 'door_code').maybeSingle();
+    document.getElementById('s_door_code').value = data?.value?.code || '';
+    document.getElementById('settingsOverlay').classList.add('open');
+  }
+
+  function closeSettingsModal(){
+    document.getElementById('settingsOverlay').classList.remove('open');
+  }
+
+  async function saveSettings(){
+    const code = document.getElementById('s_door_code').value.trim();
+    if(!code){ alert('Enter a door code first.'); return; }
+    const { error } = await sb.from('settings').upsert({ key: 'door_code', value: { code } });
+    if(error){ alert('Could not save: ' + error.message); return; }
+    closeSettingsModal();
   }
 
   checkSession();
