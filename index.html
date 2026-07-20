@@ -304,6 +304,12 @@
     </div>
     <p style="font-size:12px;color:var(--muted);margin-top:-8px;">Where new inquiry alerts are sent.</p>
 
+    <div class="field">
+      <label>Damage Hold Amount ($)</label>
+      <input type="number" id="s_damage_hold_amount" step="1">
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin-top:-8px;">Placed as a separate hold alongside the balance charge, 3-5 days before each event. Released automatically if nothing's flagged.</p>
+
     <div class="sheet-actions">
       <button class="btn ghost" onclick="closeSettingsModal()">Cancel</button>
       <button class="btn primary" onclick="saveSettings()">Save</button>
@@ -548,6 +554,19 @@
     renderCalendar();
   }
 
+  // supabase-js's error.message is just a generic "non-2xx" string —
+  // the real error text lives in the response body, read separately.
+  async function extractErrorMessage(error, data, fallback){
+    if(data?.error) return data.error;
+    if(error?.context){
+      try {
+        const body = await error.context.json();
+        if(body?.error) return body.error;
+      } catch(e){}
+    }
+    return (error && error.message) || fallback;
+  }
+
   async function sendConfirmationEmail(){
     const id = document.getElementById('bookingId').value;
     if(!id) return;
@@ -560,7 +579,7 @@
     });
     btn.disabled = false;
     btn.textContent = originalText;
-    if(error){ alert('Could not send: ' + error.message); return; }
+    if(error){ alert('Could not send: ' + await extractErrorMessage(error, data, 'unknown error')); return; }
     alert('Confirmation email sent.');
   }
 
@@ -624,9 +643,10 @@
       lines.push('Not yet sent');
     }
     if(booking.stripe_payment_method_id){ lines.push('✓ Card on file'); }
-    if(booking.deposit_authorized_at){ lines.push('✓ Deposit hold placed ' + new Date(booking.deposit_authorized_at).toLocaleDateString()); }
-    if(booking.deposit_captured_at){ lines.push('✓ Deposit captured'); }
-    if(booking.balance_invoice_sent_at){ lines.push('✓ Balance invoice sent'); }
+    if(booking.deposit_charged_at){ lines.push('✓ Deposit charged ' + new Date(booking.deposit_charged_at).toLocaleDateString()); }
+    if(booking.balance_charged_at){ lines.push('✓ Balance charged ' + new Date(booking.balance_charged_at).toLocaleDateString()); }
+    if(booking.damage_hold_placed_at && !booking.damage_hold_released_at){ lines.push('✓ $' + ((booking.damage_hold_amount_cents||0)/100).toFixed(2) + ' damage hold active'); }
+    if(booking.damage_hold_released_at){ lines.push('✓ Damage hold released'); }
     if(booking.damage_amount_cents){ lines.push('⚠ Damage flagged: $' + (booking.damage_amount_cents/100).toFixed(2)); }
     document.getElementById('agreementStatus').innerHTML = lines.map(l => '<div>'+l+'</div>').join('');
 
@@ -649,7 +669,7 @@
     btn.disabled = true; btn.textContent = 'Sending...';
     const { data, error } = await sb.functions.invoke('create-agreement-link', { body: { bookingId: currentBookingData.id } });
     if(error || !data || data.error){
-      alert('Could not send: ' + (data?.error || error?.message || 'unknown error'));
+      alert('Could not send: ' + await extractErrorMessage(error, data, 'unknown error'));
       btn.disabled = false; btn.textContent = 'Send Agreement & Payment Link';
       return;
     }
@@ -671,10 +691,10 @@
       damage_notice_sent_at: new Date().toISOString(),
     }).eq('id', currentBookingData.id);
 
-    const { error } = await sb.functions.invoke('send-booking-email', {
+    const { data: noticeData, error: noticeErr } = await sb.functions.invoke('send-booking-email', {
       body: { bookingId: currentBookingData.id, emailType: 'damage_notice', damageAmountCents: amountCents, damageDescription: descVal }
     });
-    if(error){ alert('Notice saved, but the email failed to send: ' + error.message); return; }
+    if(noticeErr){ alert('Notice saved, but the email failed to send: ' + await extractErrorMessage(noticeErr, noticeData, 'unknown error')); return; }
     alert('Damage notice sent to guest.');
     closeModal();
     renderCalendar();
@@ -685,7 +705,7 @@
     if(!confirm('Charge the card on file for the flagged damage amount now?')) return;
     const { data, error } = await sb.functions.invoke('charge-damage', { body: { bookingId: currentBookingData.id } });
     if(error || !data || data.error){
-      alert('Could not charge: ' + (data?.error || error?.message || 'unknown error'));
+      alert('Could not charge: ' + await extractErrorMessage(error, data, 'unknown error'));
       return;
     }
     alert('Charged successfully.');
@@ -698,6 +718,8 @@
     document.getElementById('s_door_code').value = doorData?.value?.code || '';
     const { data: notifyData } = await sb.from('settings').select('value').eq('key', 'notification_email').maybeSingle();
     document.getElementById('s_notification_email').value = notifyData?.value?.email || '';
+    const { data: holdData } = await sb.from('settings').select('value').eq('key', 'damage_hold_amount').maybeSingle();
+    document.getElementById('s_damage_hold_amount').value = holdData?.value?.cents ? (holdData.value.cents / 100) : 250;
     document.getElementById('settingsOverlay').classList.add('open');
   }
 
@@ -708,10 +730,12 @@
   async function saveSettings(){
     const code = document.getElementById('s_door_code').value.trim();
     const notifyEmail = document.getElementById('s_notification_email').value.trim();
+    const holdDollars = parseFloat(document.getElementById('s_damage_hold_amount').value) || 250;
     if(!code){ alert('Enter a door code first.'); return; }
     const { error: e1 } = await sb.from('settings').upsert({ key: 'door_code', value: { code } });
     const { error: e2 } = await sb.from('settings').upsert({ key: 'notification_email', value: { email: notifyEmail } });
-    if(e1 || e2){ alert('Could not save: ' + (e1?.message || e2?.message)); return; }
+    const { error: e3 } = await sb.from('settings').upsert({ key: 'damage_hold_amount', value: { cents: Math.round(holdDollars * 100) } });
+    if(e1 || e2 || e3){ alert('Could not save: ' + (e1?.message || e2?.message || e3?.message)); return; }
     closeSettingsModal();
   }
 
