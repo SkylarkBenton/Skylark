@@ -263,13 +263,12 @@
       <button class="btn primary" onclick="saveBooking()">Save Booking</button>
     </div>
     <div class="sheet-actions" id="emailActions" style="margin-top:8px;">
-      <button class="btn ghost hidden" id="sendConfirmBtn" onclick="sendConfirmationEmail()">Send Confirmation Email</button>
     </div>
 
     <div id="agreementPanel" class="hidden" style="margin-top:20px; padding-top:16px; border-top:1px solid var(--line);">
       <div style="font-size:11px; letter-spacing:0.5px; text-transform:uppercase; color:var(--muted); margin-bottom:10px;">Agreement &amp; Payment</div>
       <div id="agreementStatus" style="font-size:13px; color:var(--cream); margin-bottom:12px; line-height:1.7;"></div>
-      <button class="btn ghost" id="sendAgreementBtn" onclick="sendAgreementLink()" style="margin-bottom:14px;">Send Agreement &amp; Payment Link</button>
+      <button class="btn ghost" id="sendAgreementBtn" onclick="sendAgreementLink()" style="margin-bottom:14px;">Send Confirmation, Agreement &amp; Payment Link</button>
 
       <div id="damageSection" class="hidden">
         <div style="font-size:11px; letter-spacing:0.5px; text-transform:uppercase; color:var(--muted); margin:16px 0 10px;">Flag Damage</div>
@@ -490,7 +489,6 @@
     document.getElementById('f_notes').value = booking ? (booking.notes||'') : '';
 
     const canEmail = booking && booking.customer_email && booking.source !== 'airbnb';
-    document.getElementById('sendConfirmBtn').classList.toggle('hidden', !canEmail);
 
     const agreementPanel = document.getElementById('agreementPanel');
     agreementPanel.classList.toggle('hidden', !canEmail);
@@ -567,22 +565,6 @@
     return (error && error.message) || fallback;
   }
 
-  async function sendConfirmationEmail(){
-    const id = document.getElementById('bookingId').value;
-    if(!id) return;
-    const btn = document.getElementById('sendConfirmBtn');
-    const originalText = btn.textContent;
-    btn.textContent = 'Sending...';
-    btn.disabled = true;
-    const { data, error } = await sb.functions.invoke('send-booking-email', {
-      body: { bookingId: id, emailType: 'confirmation' }
-    });
-    btn.disabled = false;
-    btn.textContent = originalText;
-    if(error){ alert('Could not send: ' + await extractErrorMessage(error, data, 'unknown error')); return; }
-    alert('Confirmation email sent.');
-  }
-
   // ---- INQUIRIES ----
   let pendingInquiryId = null;
 
@@ -618,13 +600,15 @@
 
   function convertInquiry(inq){
     pendingInquiryId = inq.id;
-    openBookingModal(null, inq.requested_date || todayISO());
+    const eventDate = inq.requested_date || todayISO();
+    openBookingModal(null, eventDate);
     document.getElementById('f_source').value = 'website';
     document.getElementById('f_name').value = inq.name || '';
     document.getElementById('f_phone').value = inq.phone || '';
     document.getElementById('f_email').value = inq.email || '';
     document.getElementById('f_event').value = inq.event_type || '';
     document.getElementById('f_guests').value = inq.guest_count || '';
+    document.getElementById('f_rate').value = priceForDate(eventDate);
     document.getElementById('modalTitle').textContent = 'Convert Inquiry to Booking';
   }
 
@@ -651,7 +635,7 @@
     document.getElementById('agreementStatus').innerHTML = lines.map(l => '<div>'+l+'</div>').join('');
 
     const sendBtn = document.getElementById('sendAgreementBtn');
-    sendBtn.textContent = booking.agreement_signed_at ? 'Resend Not Needed — Already Signed' : (booking.agreement_sent_at ? 'Resend Agreement Link' : 'Send Agreement & Payment Link');
+    sendBtn.textContent = booking.agreement_signed_at ? 'Resend Not Needed — Already Signed' : (booking.agreement_sent_at ? 'Resend Link' : 'Send Confirmation, Agreement & Payment Link');
     sendBtn.disabled = !!booking.agreement_signed_at;
 
     document.getElementById('damageSection').classList.toggle('hidden', !booking.stripe_payment_method_id);
@@ -670,7 +654,7 @@
     const { data, error } = await sb.functions.invoke('create-agreement-link', { body: { bookingId: currentBookingData.id } });
     if(error || !data || data.error){
       alert('Could not send: ' + await extractErrorMessage(error, data, 'unknown error'));
-      btn.disabled = false; btn.textContent = 'Send Agreement & Payment Link';
+      btn.disabled = false; btn.textContent = 'Send Confirmation, Agreement & Payment Link';
       return;
     }
     alert('Agreement link sent!');
