@@ -4,6 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
 <meta name="theme-color" content="#14192B">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Skylark">
 <title>The Skylark — Bookings</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Limelight&family=Oswald:wght@400;500;600;700&family=Work+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -196,7 +202,7 @@
     <input type="hidden" id="bookingId">
 
     <div class="row3">
-      <div class="field"><label>Date</label><input type="date" id="f_date"></div>
+      <div class="field"><label>Date</label><input type="date" id="f_date" onchange="suggestRateFromDate()"></div>
       <div class="field"><label>End Date</label><input type="date" id="f_end_date"></div>
       <div class="field"><label>Source</label>
         <select id="f_source">
@@ -260,6 +266,7 @@
 </div>
 
 <script>
+
   // ---- CONFIG ----
   const SUPABASE_URL = 'https://rywomhsgcaighcwnftoa.supabase.co';
   const SUPABASE_ANON_KEY = 'sb_publishable_2B_fjldZNj5TWYia1WMLnQ_GM4scyXg';
@@ -270,6 +277,21 @@
   let bookingsCache = [];
 
   function todayISO(){ return new Date().toISOString().slice(0,10); }
+
+  // Weekday (Mon-Thu) = $350, Weekend (Fri-Sun) = $500
+  function priceForDate(dateStr){
+    const day = new Date(dateStr + 'T00:00:00').getDay();
+    return (day === 0 || day === 5 || day === 6) ? 500 : 350;
+  }
+
+  function suggestRateFromDate(){
+    const dateVal = document.getElementById('f_date').value;
+    const rateField = document.getElementById('f_rate');
+    if(dateVal && !rateField.value){
+      rateField.value = priceForDate(dateVal);
+    }
+  }
+
 
   // ---- AUTH ----
   async function doLogin(){
@@ -538,6 +560,7 @@
   }
 
   checkSession();
+
 </script>
 </body>
 </html>
