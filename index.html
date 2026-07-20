@@ -298,6 +298,12 @@
     </div>
     <p style="font-size:12px;color:var(--muted);margin-top:-8px;">This is sent automatically to guests once they sign their agreement and save a card. Changing it here only affects future auto-sent emails — remember to also update it on the physical lock.</p>
 
+    <div class="field">
+      <label>Notification Email</label>
+      <input type="email" id="s_notification_email" placeholder="you@email.com">
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin-top:-8px;">Where new inquiry alerts are sent.</p>
+
     <div class="sheet-actions">
       <button class="btn ghost" onclick="closeSettingsModal()">Cancel</button>
       <button class="btn primary" onclick="saveSettings()">Save</button>
@@ -688,8 +694,10 @@
   }
 
   async function openSettingsModal(){
-    const { data } = await sb.from('settings').select('value').eq('key', 'door_code').maybeSingle();
-    document.getElementById('s_door_code').value = data?.value?.code || '';
+    const { data: doorData } = await sb.from('settings').select('value').eq('key', 'door_code').maybeSingle();
+    document.getElementById('s_door_code').value = doorData?.value?.code || '';
+    const { data: notifyData } = await sb.from('settings').select('value').eq('key', 'notification_email').maybeSingle();
+    document.getElementById('s_notification_email').value = notifyData?.value?.email || '';
     document.getElementById('settingsOverlay').classList.add('open');
   }
 
@@ -699,9 +707,11 @@
 
   async function saveSettings(){
     const code = document.getElementById('s_door_code').value.trim();
+    const notifyEmail = document.getElementById('s_notification_email').value.trim();
     if(!code){ alert('Enter a door code first.'); return; }
-    const { error } = await sb.from('settings').upsert({ key: 'door_code', value: { code } });
-    if(error){ alert('Could not save: ' + error.message); return; }
+    const { error: e1 } = await sb.from('settings').upsert({ key: 'door_code', value: { code } });
+    const { error: e2 } = await sb.from('settings').upsert({ key: 'notification_email', value: { email: notifyEmail } });
+    if(e1 || e2){ alert('Could not save: ' + (e1?.message || e2?.message)); return; }
     closeSettingsModal();
   }
 
