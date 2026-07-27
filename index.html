@@ -199,6 +199,7 @@
     <div class="amenity"><div class="num" id="statBookings">0</div><div class="label">Bookings</div></div>
     <div class="amenity"><div class="num" id="statOccupancy">0%</div><div class="label">Occupancy</div></div>
     <div class="amenity"><div class="num" id="statBySource" style="font-size:14px;"></div><div class="label">By Source</div></div>
+    <div class="amenity"><div class="num" id="statHeardAbout" style="font-size:13px;"></div><div class="label">Top Marketing Source</div></div>
   </div>
 
   <div class="section-title">Upcoming Bookings</div>
@@ -219,6 +220,7 @@
     <button class="close-x" onclick="closeModal()">✕</button>
     <h3 id="modalTitle">New Booking</h3>
     <input type="hidden" id="bookingId">
+    <input type="hidden" id="f_heard_about">
 
     <div class="row3">
       <div class="field"><label>Date</label><input type="date" id="f_date" onchange="suggestRateFromDate()"></div>
@@ -511,11 +513,18 @@
     const bySource = { airbnb: 0, private: 0, website: 0 };
     monthBookings.forEach(b => { if(bySource[b.source] !== undefined) bySource[b.source]++; });
 
+    const heardAboutTally = {};
+    monthBookings.forEach(b => {
+      if(b.heard_about){ heardAboutTally[b.heard_about] = (heardAboutTally[b.heard_about] || 0) + 1; }
+    });
+    const topHeardAbout = Object.entries(heardAboutTally).sort((a,b) => b[1] - a[1])[0];
+
     document.getElementById('statRevenue').textContent = '$' + revenue.toLocaleString();
     document.getElementById('statBookings').textContent = count;
     document.getElementById('statOccupancy').textContent = occupancyPct + '%';
     document.getElementById('statBySource').innerHTML =
       `A:${bySource.airbnb} · P:${bySource.private} · W:${bySource.website}`;
+    document.getElementById('statHeardAbout').textContent = topHeardAbout ? `${topHeardAbout[0]} (${topHeardAbout[1]})` : '—';
   }
 
   async function renderUpcoming(){
@@ -561,6 +570,7 @@
     document.getElementById('deleteBtn').classList.toggle('hidden', !booking);
     document.getElementById('modalTitle').textContent = booking ? 'Edit Booking' : 'New Booking';
     document.getElementById('bookingId').value = booking ? booking.id : '';
+    document.getElementById('f_heard_about').value = booking ? (booking.heard_about || '') : '';
     document.getElementById('f_date').value = booking ? booking.event_date : (defaultDate || todayISO());
     document.getElementById('f_end_date').value = booking ? (booking.end_date || booking.event_date) : (defaultDate || todayISO());
     document.getElementById('f_source').value = booking ? booking.source : 'private';
@@ -599,6 +609,7 @@
       end_date: (endDateInput && endDateInput >= startDate) ? endDateInput : startDate,
       source: document.getElementById('f_source').value,
       customer_name: document.getElementById('f_name').value || null,
+      heard_about: document.getElementById('f_heard_about').value || null,
       customer_phone: document.getElementById('f_phone').value || null,
       customer_email: document.getElementById('f_email').value || null,
       event_type: document.getElementById('f_event').value || null,
@@ -675,7 +686,7 @@
           <div class="b-date">${dateLabel}</div>
           <div>
             <div class="b-name">${inq.name}</div>
-            <div class="b-sub">${inq.event_type || ''}${inq.guest_count ? ' · '+inq.guest_count+' guests' : ''}${inq.phone ? ' · '+inq.phone : ''}${inq.email ? ' · '+inq.email : ''}</div>
+            <div class="b-sub">${inq.event_type || ''}${inq.guest_count ? ' · '+inq.guest_count+' guests' : ''}${inq.phone ? ' · '+inq.phone : ''}${inq.email ? ' · '+inq.email : ''}${inq.heard_about ? ' · via '+inq.heard_about : ''}</div>
             ${inq.message ? `<div class="b-sub" style="margin-top:4px;font-style:italic;">"${inq.message}"</div>` : ''}
           </div>
         </div>
@@ -698,6 +709,7 @@
     document.getElementById('f_event').value = inq.event_type || '';
     document.getElementById('f_guests').value = inq.guest_count || '';
     document.getElementById('f_rate').value = priceForDate(eventDate);
+    document.getElementById('f_heard_about').value = inq.heard_about || '';
     document.getElementById('modalTitle').textContent = 'Convert Inquiry to Booking';
   }
 
