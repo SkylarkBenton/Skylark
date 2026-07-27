@@ -80,6 +80,10 @@
 
   /* Legend */
   .legend{ display:flex; gap:18px; margin:16px 2px 30px; font-size:12px; color:var(--muted); }
+  .amenities{ display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:12px; }
+  .amenity{ background:var(--ink-2); border:1px solid var(--line); border-radius:12px; padding:14px; text-align:center; }
+  .amenity .num{ font-family:'Oswald',sans-serif; font-size:20px; color:var(--red-lt); }
+  .amenity .label{ font-size:11px; color:var(--muted); letter-spacing:0.5px; text-transform:uppercase; margin-top:4px; }
   .legend span{ display:inline-flex; align-items:center; gap:6px; }
 
   /* List */
@@ -187,6 +191,14 @@
     <span><i class="dot airbnb" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--steel)"></i> Airbnb</span>
     <span><i class="dot private" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--red)"></i> Private</span>
     <span><i class="dot website" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--red-lt)"></i> Website</span>
+  </div>
+
+  <div class="section-title" id="statsTitle">This Month</div>
+  <div class="amenities" id="statsPanel" style="margin-bottom:10px;">
+    <div class="amenity"><div class="num" id="statRevenue">$0</div><div class="label">Revenue</div></div>
+    <div class="amenity"><div class="num" id="statBookings">0</div><div class="label">Bookings</div></div>
+    <div class="amenity"><div class="num" id="statOccupancy">0%</div><div class="label">Occupancy</div></div>
+    <div class="amenity"><div class="num" id="statBySource" style="font-size:14px;"></div><div class="label">By Source</div></div>
   </div>
 
   <div class="section-title">Upcoming Bookings</div>
@@ -423,6 +435,7 @@
     }
     grid.innerHTML = html;
     renderUpcoming();
+    renderMonthStats();
   }
 
   function handleDayClick(dateStr){
@@ -467,6 +480,42 @@
         <div class="badge unpaid">unsigned</div>
       </div>`;
     }).join('');
+  }
+
+  async function renderMonthStats(){
+    const daysInMonth = new Date(currentYear, currentMonth+1, 0).getDate();
+    const monthStart = `${currentYear}-${String(currentMonth+1).padStart(2,'0')}-01`;
+    const monthEnd = `${currentYear}-${String(currentMonth+1).padStart(2,'0')}-${String(daysInMonth).padStart(2,'0')}`;
+
+    document.getElementById('statsTitle').textContent = `${MONTHS[currentMonth]} ${currentYear} Stats`;
+
+    // bookingsCache already holds every non-cancelled booking overlapping
+    // this month (fetched by renderCalendar), so no extra query needed.
+    const monthBookings = bookingsCache;
+
+    const revenue = monthBookings.reduce((sum, b) => sum + (Number(b.rate) || 0), 0);
+    const count = monthBookings.length;
+
+    // Occupied days: any calendar day in this month covered by a booking's range
+    let occupiedDays = 0;
+    for(let day=1; day<=daysInMonth; day++){
+      const dateStr = `${currentYear}-${String(currentMonth+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+      const isOccupied = monthBookings.some(b => {
+        const end = b.end_date || b.event_date;
+        return dateStr >= b.event_date && dateStr <= end;
+      });
+      if(isOccupied) occupiedDays++;
+    }
+    const occupancyPct = daysInMonth > 0 ? Math.round((occupiedDays / daysInMonth) * 100) : 0;
+
+    const bySource = { airbnb: 0, private: 0, website: 0 };
+    monthBookings.forEach(b => { if(bySource[b.source] !== undefined) bySource[b.source]++; });
+
+    document.getElementById('statRevenue').textContent = '$' + revenue.toLocaleString();
+    document.getElementById('statBookings').textContent = count;
+    document.getElementById('statOccupancy').textContent = occupancyPct + '%';
+    document.getElementById('statBySource').innerHTML =
+      `A:${bySource.airbnb} · P:${bySource.private} · W:${bySource.website}`;
   }
 
   async function renderUpcoming(){
