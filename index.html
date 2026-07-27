@@ -192,6 +192,9 @@
   <div class="section-title">Upcoming Bookings</div>
   <div id="upcomingList"></div>
 
+  <div class="section-title">Needs Attention</div>
+  <div id="needsAttentionList"></div>
+
   <div class="section-title">New Inquiries</div>
   <div id="inquiriesList"></div>
 </div>
@@ -366,6 +369,7 @@
     document.getElementById('fabAdd').classList.remove('hidden');
     renderCalendar();
     renderInquiries();
+    renderNeedsAttention();
   }
 
   // ---- CALENDAR ----
@@ -429,6 +433,40 @@
     if(existing.length === 1){ openBookingModal(existing[0]); }
     else if(existing.length > 1){ openBookingModal(existing[0]); }
     else { openBookingModal(null, dateStr); }
+  }
+
+  async function renderNeedsAttention(){
+    const { data } = await sb.from('bookings')
+      .select('*')
+      .eq('status', 'confirmed')
+      .in('source', ['private', 'website'])
+      .is('agreement_signed_at', null)
+      .gte('event_date', todayISO())
+      .order('event_date')
+      .limit(15);
+
+    const list = document.getElementById('needsAttentionList');
+    if(!data || data.length === 0){
+      list.innerHTML = `<div class="empty-state">Nothing needs attention right now — everything upcoming is signed.</div>`;
+      return;
+    }
+    list.innerHTML = data.map(b => {
+      const d = new Date(b.event_date + 'T00:00:00');
+      const dateLabel = d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+      const daysOut = Math.ceil((d - new Date(todayISO() + 'T00:00:00')) / (1000*60*60*24));
+      const urgent = daysOut <= 7;
+      const statusText = b.agreement_sent_at ? 'Link sent, awaiting signature' : 'Not sent yet';
+      return `<div class="booking-row" onclick='openBookingModal(${JSON.stringify(b)})'>
+        <div class="b-left">
+          <div class="b-date" style="${urgent ? 'color:var(--red-lt);' : ''}">${dateLabel}</div>
+          <div>
+            <div class="b-name">${b.customer_name || '(no name yet)'}</div>
+            <div class="b-sub">${statusText}${daysOut >= 0 ? ' · ' + daysOut + ' day' + (daysOut === 1 ? '' : 's') + ' out' : ''}</div>
+          </div>
+        </div>
+        <div class="badge unpaid">unsigned</div>
+      </div>`;
+    }).join('');
   }
 
   async function renderUpcoming(){
@@ -541,6 +579,7 @@
     closeModal();
     renderCalendar();
     renderInquiries();
+    renderNeedsAttention();
   }
 
   async function deleteBooking(){
@@ -661,6 +700,7 @@
     alert('Agreement link sent!');
     closeModal();
     renderCalendar();
+    renderNeedsAttention();
   }
 
   async function sendDamageNotice(){
