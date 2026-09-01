@@ -7,8 +7,10 @@ import { bookingDeskUrl, handleCors, json, serviceClient } from '../_shared/http
  * Guest-facing mail stays on the existing save-agreement path
  * and is not touched here.
  *
- * Dedup: claim host_paid_notified_at before sending; roll it back if the
- * send fails so a retry can try again without double-emailing on success.
+ * Dedup: one host email per deposit. Claim host_paid_notified_at after
+ * the deposit is recorded (deposit_charged_at / paid completion) and
+ * roll it back if send fails so a retry can try again without
+ * double-emailing on success.
  *
  * Money / date formulas stay in sync with lib/host-paid-email.mjs.
  */
@@ -141,6 +143,9 @@ Deno.serve(async (req) => {
   const paidLabel = formatMoney(paid) || 'an amount we could not determine';
   const remainingLabel = remaining === null ? null : formatMoney(remaining);
   const dateLabel = formatDateRange(booking.event_date, booking.end_date);
+  const signedLabel = booking.agreement_signed_at
+    ? new Date(booking.agreement_signed_at).toLocaleString('en-US')
+    : null;
   const guest = booking.customer_name || 'Guest';
   const deskUrl = bookingDeskUrl();
 
@@ -154,6 +159,7 @@ Deno.serve(async (req) => {
           Dates: ${dateLabel}<br>
           Amount paid: ${paidLabel}<br>
           ${remainingLabel ? `Remaining balance: ${remainingLabel}<br>` : ''}
+          ${signedLabel ? `Signed at: ${signedLabel}<br>` : ''}
         </p>
         <p><a href="${deskUrl}" style="display:inline-block;margin-top:12px;background:#A31E24;color:#fff;padding:12px 18px;border-radius:10px;text-decoration:none;font-weight:600;">Open booking desk</a></p>
         <p style="color:#8C8C93;font-size:13px;">Or open: ${deskUrl}</p>

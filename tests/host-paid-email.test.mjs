@@ -57,6 +57,7 @@ test('notify-host-paid emails settings.notification_email and dedups with a clai
   assert.match(fn, /host_paid_notified_at: null/);
   assert.match(fn, /Amount paid/);
   assert.match(fn, /Remaining balance/);
+  assert.match(fn, /Signed at/);
   assert.match(fn, /BOOKING_DESK_URL|bookingDeskUrl|skylarkbooking\.vercel\.app/);
   assert.doesNotMatch(fn, /damage_notice/);
   assert.doesNotMatch(fn, /emailType/);
