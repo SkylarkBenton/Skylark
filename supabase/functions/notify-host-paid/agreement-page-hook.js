@@ -1,6 +1,6 @@
-// Optional client fallback for SkylarkBenton/skylark-site agreement.html.
-// Paste after a successful save-agreement invoke. The database trigger is
-// the primary path; this covers the case where the trigger is not applied yet.
+// Intended client path for SkylarkBenton/skylark-site agreement.html.
+// Invoke only after save-agreement succeeds. Do not call on failure.
+// Dedup is deposit_charged_at — retries will not double-email the host.
 //
 // const { data: saveData, error: saveErr } = await sb.functions.invoke('save-agreement', { ... });
 // if (saveErr || !saveData || saveData.error) { throw ... }

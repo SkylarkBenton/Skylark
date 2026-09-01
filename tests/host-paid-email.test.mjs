@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
+  alreadyNotifiedForDeposit,
   formatDateRange,
   formatMoney,
   isPaidCompletion,
@@ -42,19 +43,26 @@ test('formatters cover a multi-night stay and USD', () => {
   assert.match(formatDateRange('2026-09-12', '2026-09-13'), /September 13, 2026/);
 });
 
-test('isPaidCompletion is true after deposit / sign+pay, never for Airbnb', () => {
-  assert.equal(isPaidCompletion({ payment_status: 'deposit_paid' }), true);
+test('isPaidCompletion requires deposit_charged_at and skips Airbnb', () => {
   assert.equal(isPaidCompletion({ deposit_charged_at: '2026-09-01T12:00:00Z' }), true);
-  assert.equal(isPaidCompletion({ agreement_signed_at: '2026-09-01T12:00:00Z', amount_paid: 250 }), true);
-  assert.equal(isPaidCompletion({ payment_status: 'unpaid' }), false);
-  assert.equal(isPaidCompletion({ source: 'airbnb', payment_status: 'deposit_paid' }), false);
+  assert.equal(isPaidCompletion({ payment_status: 'deposit_paid' }), false);
+  assert.equal(isPaidCompletion({ agreement_signed_at: '2026-09-01T12:00:00Z', amount_paid: 250 }), false);
+  assert.equal(isPaidCompletion({ source: 'airbnb', deposit_charged_at: '2026-09-01T12:00:00Z' }), false);
+});
+
+test('alreadyNotifiedForDeposit keys off the same deposit_charged_at', () => {
+  const charged = '2026-09-01T12:00:00Z';
+  assert.equal(alreadyNotifiedForDeposit({ deposit_charged_at: charged, host_paid_notified_at: charged }), true);
+  assert.equal(alreadyNotifiedForDeposit({ deposit_charged_at: charged, host_paid_notified_at: null }), false);
+  assert.equal(alreadyNotifiedForDeposit({ deposit_charged_at: charged, host_paid_notified_at: '2026-08-01T12:00:00Z' }), false);
 });
 
 test('notify-host-paid emails settings.notification_email and dedups with a claim', () => {
   assert.match(fn, /notification_email/);
   assert.match(fn, /host_paid_notified_at/);
   assert.match(fn, /alreadyNotified/);
-  assert.match(fn, /host_paid_notified_at: null/);
+  assert.match(fn, /host_paid_notified_at: booking.deposit_charged_at/);
+  assert.match(fn, /eq\('deposit_charged_at', booking.deposit_charged_at\)/);
   assert.match(fn, /Amount paid/);
   assert.match(fn, /Remaining balance/);
   assert.match(fn, /Signed at/);

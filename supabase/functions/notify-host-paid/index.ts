@@ -7,10 +7,9 @@ import { bookingDeskUrl, handleCors, json, serviceClient } from '../_shared/http
  * Guest-facing mail stays on the existing save-agreement path
  * and is not touched here.
  *
- * Dedup: one host email per deposit. Claim host_paid_notified_at after
- * the deposit is recorded (deposit_charged_at / paid completion) and
- * roll it back if send fails so a retry can try again without
- * double-emailing on success.
+ * Dedup on deposit_charged_at: claim host_paid_notified_at = that
+ * timestamp. A retry for the same deposit is alreadyNotified. Roll
+ * the claim back if send fails.
  *
  * Money / date formulas stay in sync with lib/host-paid-email.mjs.
  */
@@ -63,13 +62,13 @@ function paidAndRemaining(booking: Booking) {
   return { paid: paid || null, remaining };
 }
 
+function alreadyNotifiedForDeposit(booking: Booking) {
+  return Boolean(booking.deposit_charged_at && booking.host_paid_notified_at === booking.deposit_charged_at);
+}
+
 function isPaidCompletion(booking: Booking) {
   if (booking.source === 'airbnb') return false;
-  if (booking.payment_status === 'deposit_paid' || booking.payment_status === 'paid_in_full') return true;
-  if (booking.deposit_charged_at) return true;
-  const paid = Number(booking.amount_paid);
-  if (booking.agreement_signed_at && Number.isFinite(paid) && paid > 0) return true;
-  return false;
+  return Boolean(booking.deposit_charged_at);
 }
 
 async function findBooking(sb: ReturnType<typeof createClient>, body: Record<string, unknown>) {
@@ -115,15 +114,16 @@ Deno.serve(async (req) => {
   }
 
   if (!booking) return json({ error: 'Booking not found' }, 404);
-  if (booking.host_paid_notified_at) return json({ ok: true, alreadyNotified: true });
+  if (alreadyNotifiedForDeposit(booking)) return json({ ok: true, alreadyNotified: true });
   if (!isPaidCompletion(booking)) {
     return json({ ok: true, skipped: 'not_paid' });
   }
 
   const { data: claimed, error: claimErr } = await sb
     .from('bookings')
-    .update({ host_paid_notified_at: new Date().toISOString() })
+    .update({ host_paid_notified_at: booking.deposit_charged_at })
     .eq('id', booking.id)
+    .eq('deposit_charged_at', booking.deposit_charged_at)
     .is('host_paid_notified_at', null)
     .select('id')
     .maybeSingle();
