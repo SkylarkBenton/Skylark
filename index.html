@@ -344,7 +344,39 @@
   let currentYear = new Date().getFullYear();
   let bookingsCache = [];
 
-  function todayISO(){ return new Date().toISOString().slice(0,10); }
+  // Date-only helpers — keep in sync with lib/booking-dates.mjs.
+  // Never parse YYYY-MM-DD with `new Date('YYYY-MM-DD')` (UTC midnight
+  // becomes the previous calendar day in Chicago).
+  function dateOnly(value){
+    if(value == null || value === '') return '';
+    const m = String(value).match(/^(\d{4}-\d{2}-\d{2})/);
+    return m ? m[1] : '';
+  }
+  function todayISO(){
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  function addDaysISO(iso, days){
+    const [y, m, d] = String(iso).split('-').map(Number);
+    const dt = new Date(y, m - 1, d + days);
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+  }
+  function bookingRange(b){
+    const start = dateOnly(b && b.event_date);
+    const end = dateOnly(b && b.end_date) || start;
+    return { start, end };
+  }
+  function bookingCoversDay(b, dateStr){
+    const { start, end } = bookingRange(b);
+    return Boolean(start && dateStr >= start && dateStr <= end);
+  }
+  function bookingOverlapsMonth(b, monthStart, monthEnd){
+    const { start, end } = bookingRange(b);
+    return Boolean(start && start <= monthEnd && end >= monthStart);
+  }
 
   // Weekday (Mon-Thu) = $350, Weekend (Fri-Sun) = $500
   function priceForDate(dateStr){
@@ -407,27 +439,29 @@
     const monthStart = `${currentYear}-${String(currentMonth+1).padStart(2,'0')}-01`;
     const monthEnd = `${currentYear}-${String(currentMonth+1).padStart(2,'0')}-${String(daysInMonth).padStart(2,'0')}`;
 
-    // Overlap query: a booking counts if it starts before month end
-    // AND ends on/after month start (catches multi-night stays that
-    // started last month or run into next month).
+    // Same event_date inequalities as the upcoming list (which already
+    // paints these rows). The previous PostgREST overlap clause
+    // `.or(end_date.gte.monthStart,end_date.is.null)` came back empty
+    // in production while upcoming showed the same confirmed bookings.
+    // Look back a quarter so a stay that started last month still
+    // lands on this grid, then apply overlap with date-only strings.
+    const lookback = addDaysISO(monthStart, -93);
     const { data, error } = await sb.from('bookings')
       .select('*')
+      .gte('event_date', lookback)
       .lte('event_date', monthEnd)
-      .or(`end_date.gte.${monthStart},end_date.is.null`)
       .neq('status','cancelled')
       .order('event_date');
 
-    bookingsCache = data || [];
+    if(error){ console.error('Calendar bookings query failed', error); }
+    bookingsCache = (data || []).filter(b => bookingOverlapsMonth(b, monthStart, monthEnd));
     const grid = document.getElementById('calGrid');
     let html = '';
     for(let i=0;i<firstDay;i++){ html += `<div class="cal-day empty"></div>`; }
 
     for(let day=1; day<=daysInMonth; day++){
       const dateStr = `${currentYear}-${String(currentMonth+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-      const dayBookings = bookingsCache.filter(b => {
-        const end = b.end_date || b.event_date;
-        return dateStr >= b.event_date && dateStr <= end;
-      });
+      const dayBookings = bookingsCache.filter(b => bookingCoversDay(b, dateStr));
       const isToday = dateStr === todayISO();
       const dots = dayBookings.map(b => `<span class="dot ${b.source}"></span>`).join('');
       html += `<div class="cal-day ${isToday?'today':''}" onclick="handleDayClick('${dateStr}')">
@@ -441,10 +475,7 @@
   }
 
   function handleDayClick(dateStr){
-    const existing = bookingsCache.filter(b => {
-      const end = b.end_date || b.event_date;
-      return dateStr >= b.event_date && dateStr <= end;
-    });
+    const existing = bookingsCache.filter(b => bookingCoversDay(b, dateStr));
     if(existing.length === 1){ openBookingModal(existing[0]); }
     else if(existing.length > 1){ openBookingModal(existing[0]); }
     else { openBookingModal(null, dateStr); }
@@ -502,10 +533,7 @@
     let occupiedDays = 0;
     for(let day=1; day<=daysInMonth; day++){
       const dateStr = `${currentYear}-${String(currentMonth+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-      const isOccupied = monthBookings.some(b => {
-        const end = b.end_date || b.event_date;
-        return dateStr >= b.event_date && dateStr <= end;
-      });
+      const isOccupied = monthBookings.some(b => bookingCoversDay(b, dateStr));
       if(isOccupied) occupiedDays++;
     }
     const occupancyPct = daysInMonth > 0 ? Math.round((occupiedDays / daysInMonth) * 100) : 0;
