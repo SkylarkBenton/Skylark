@@ -2,3 +2,6 @@ project_id = "rywomhsgcaighcwnftoa"
 
 [functions.notify-host-paid]
 verify_jwt = true
+
+[functions.nudge-unsigned-bookings]
+verify_jwt = false

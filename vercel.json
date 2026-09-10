@@ -1,5 +1,11 @@
 {
   "rewrites": [
     { "source": "/calendar.ics", "destination": "/api/calendar" }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/nudge-unsigned",
+      "schedule": "30 15 * * *"
+    }
   ]
 }
