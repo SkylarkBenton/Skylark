@@ -579,7 +579,11 @@
       const dateLabel = d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
       const daysOut = Math.ceil((d - new Date(todayISO() + 'T00:00:00')) / (1000*60*60*24));
       const urgent = daysOut <= 7;
-      const statusText = b.agreement_sent_at ? 'Link sent, awaiting signature' : 'Not sent yet';
+      let statusText = b.agreement_sent_at ? 'Link sent, awaiting signature' : 'Not sent yet';
+      if(b.nudge_sent_at){
+        const nudged = new Date(b.nudge_sent_at).toLocaleDateString('en-US', {month:'short', day:'numeric'});
+        statusText = 'Nudged ' + nudged + ' — still awaiting signature';
+      }
       return `<div class="booking-row" onclick='openBookingModal(${JSON.stringify(b)})'>
         <div class="b-left">
           <div class="b-date" style="${urgent ? 'color:var(--red-lt);' : ''}">${dateLabel}</div>
@@ -861,6 +865,9 @@
       lines.push('Sent ' + new Date(booking.agreement_sent_at).toLocaleDateString() + ' — awaiting signature');
     } else {
       lines.push('Not yet sent');
+    }
+    if(booking.nudge_sent_at && !booking.agreement_signed_at){
+      lines.push('Auto-nudged ' + new Date(booking.nudge_sent_at).toLocaleDateString() + ' — guest asked to sign, pay, or reply to cancel');
     }
     if(booking.stripe_payment_method_id){ lines.push('✓ Card on file'); }
     if(booking.deposit_charged_at){ lines.push('✓ Deposit charged ' + new Date(booking.deposit_charged_at).toLocaleDateString()); }

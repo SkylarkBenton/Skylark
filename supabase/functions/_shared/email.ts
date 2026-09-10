@@ -5,7 +5,7 @@
  * Do not introduce a new provider.
  */
 
-type Email = { to: string; subject: string; html: string; text?: string };
+type Email = { to: string; subject: string; html: string; text?: string; replyTo?: string };
 
 function fromAddress() {
   return Deno.env.get('EMAIL_FROM') || 'The Skylark <hello@skylarkbenton.com>';
@@ -24,6 +24,7 @@ async function sendResend(email: Email, apiKey: string) {
       subject: email.subject,
       html: email.html,
       text: email.text,
+      ...(email.replyTo ? { reply_to: email.replyTo } : {}),
     }),
   });
   const body = await res.text();
@@ -41,6 +42,7 @@ async function sendSendgrid(email: Email, apiKey: string) {
     body: JSON.stringify({
       personalizations: [{ to: [{ email: email.to }] }],
       from: parseFrom(fromAddress()),
+      ...(email.replyTo ? { reply_to: parseFrom(email.replyTo) } : {}),
       subject: email.subject,
       content: [
         { type: 'text/plain', value: email.text || stripHtml(email.html) },
@@ -67,6 +69,7 @@ async function sendPostmark(email: Email, token: string) {
     body: JSON.stringify({
       From: from,
       To: email.to,
+      ...(email.replyTo ? { ReplyTo: email.replyTo } : {}),
       Subject: email.subject,
       HtmlBody: email.html,
       TextBody: email.text || stripHtml(email.html),
