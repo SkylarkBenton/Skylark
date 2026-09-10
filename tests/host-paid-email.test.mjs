@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
-  alreadyNotifiedForDeposit,
+  alreadyNotifiedForLockIn,
   formatDateRange,
   formatMoney,
   hostNotifyCopy,
-  isAirbnbLockedIn,
+  isLockedIn,
   isPaidCompletion,
   paidAndRemaining,
 } from '../lib/host-paid-email.mjs';
@@ -49,57 +49,85 @@ test('formatters cover a multi-night stay and USD', () => {
   assert.match(formatDateRange('2026-09-12', '2026-09-13'), /September 13, 2026/);
 });
 
-test('isPaidCompletion accepts website deposit_charged_at and Airbnb lock-in', () => {
+test('isPaidCompletion treats website confirm and deposit as lock-in', () => {
+  assert.equal(isPaidCompletion({ source: 'website', status: 'confirmed' }), true);
   assert.equal(isPaidCompletion({ deposit_charged_at: '2026-09-01T12:00:00Z' }), true);
   assert.equal(isPaidCompletion({ payment_status: 'deposit_paid' }), false);
   assert.equal(isPaidCompletion({ agreement_signed_at: '2026-09-01T12:00:00Z', amount_paid: 250 }), false);
   assert.equal(isPaidCompletion({ source: 'airbnb', status: 'confirmed' }), true);
-  assert.equal(isPaidCompletion({ source: 'airbnb', deposit_charged_at: '2026-09-01T12:00:00Z' }), true);
-  assert.equal(isPaidCompletion({ source: 'airbnb', status: 'pending' }), false);
-  assert.equal(isPaidCompletion({ source: 'airbnb', status: 'cancelled' }), false);
-  assert.equal(isAirbnbLockedIn({ source: 'website', status: 'confirmed' }), false);
+  assert.equal(isPaidCompletion({ source: 'website', status: 'pending' }), false);
+  assert.equal(isPaidCompletion({ source: 'website', status: 'cancelled' }), false);
+  assert.equal(isLockedIn({ source: 'website', status: 'confirmed' }), true);
 });
 
-test('alreadyNotifiedForDeposit keys off deposit_charged_at, or any claim for Airbnb', () => {
+test('alreadyNotifiedForLockIn allows a deposit mail after a confirm claim', () => {
   const charged = '2026-09-01T12:00:00Z';
-  assert.equal(alreadyNotifiedForDeposit({ deposit_charged_at: charged, host_paid_notified_at: charged }), true);
-  assert.equal(alreadyNotifiedForDeposit({ deposit_charged_at: charged, host_paid_notified_at: null }), false);
-  assert.equal(alreadyNotifiedForDeposit({ deposit_charged_at: charged, host_paid_notified_at: '2026-08-01T12:00:00Z' }), false);
-  assert.equal(alreadyNotifiedForDeposit({
-    source: 'airbnb',
-    status: 'confirmed',
-    host_paid_notified_at: '2026-09-10T12:00:00Z',
-  }), true);
-  assert.equal(alreadyNotifiedForDeposit({
-    source: 'airbnb',
+  const confirmClaim = '2026-08-24T12:00:00Z';
+  assert.equal(alreadyNotifiedForLockIn({
+    source: 'website',
     status: 'confirmed',
     host_paid_notified_at: null,
   }), false);
+  assert.equal(alreadyNotifiedForLockIn({
+    source: 'website',
+    status: 'confirmed',
+    host_paid_notified_at: confirmClaim,
+  }), true);
+  assert.equal(alreadyNotifiedForLockIn({
+    deposit_charged_at: charged,
+    host_paid_notified_at: charged,
+  }), true);
+  assert.equal(alreadyNotifiedForLockIn({
+    deposit_charged_at: charged,
+    host_paid_notified_at: null,
+  }), false);
+  assert.equal(alreadyNotifiedForLockIn({
+    deposit_charged_at: charged,
+    host_paid_notified_at: confirmClaim,
+  }), false);
 });
 
-test('Airbnb copy does not invent a deposit amount', () => {
-  const copy = hostNotifyCopy({ source: 'airbnb', status: 'confirmed', customer_name: 'Airbnb' });
-  assert.equal(copy.subjectPrefix, 'Airbnb confirmed');
-  assert.equal(copy.includeAmounts, false);
-  assert.match(copy.intro, /locked in on Airbnb/);
-  const website = hostNotifyCopy({ source: 'website', customer_name: 'Sarah Shehane' });
-  assert.equal(website.subjectPrefix, 'Deposit paid');
-  assert.equal(website.includeAmounts, true);
+test('website confirm copy is the primary path; deposit copy includes amounts', () => {
+  const sarah = hostNotifyCopy({
+    source: 'website',
+    status: 'confirmed',
+    customer_name: 'Sarah Shehane',
+  });
+  assert.equal(sarah.subjectPrefix, 'Booking confirmed');
+  assert.equal(sarah.includeAmounts, false);
+  assert.match(sarah.intro, /locked in on the booking desk/);
+  assert.doesNotMatch(sarah.intro, /Airbnb/);
+
+  const deposit = hostNotifyCopy({
+    source: 'website',
+    customer_name: 'Sarah Shehane',
+    deposit_charged_at: '2026-09-01T12:00:00Z',
+  });
+  assert.equal(deposit.subjectPrefix, 'Deposit paid');
+  assert.equal(deposit.includeAmounts, true);
+  assert.match(deposit.intro, /completed their agreement/);
+
+  const airbnb = hostNotifyCopy({ source: 'airbnb', status: 'confirmed', customer_name: 'Airbnb' });
+  assert.equal(airbnb.subjectPrefix, 'Booking confirmed');
+  assert.equal(airbnb.includeAmounts, false);
+  assert.match(airbnb.intro, /\(Airbnb\)/);
 });
 
 test('notify-host-paid emails settings.notification_email and dedups with a claim', () => {
   assert.match(fn, /notification_email/);
   assert.match(fn, /host_paid_notified_at/);
-  assert.match(fn, /alreadyNotified/);
+  assert.match(fn, /alreadyNotifiedForLockIn/);
   assert.match(fn, /host_paid_notified_at: claimAt/);
   assert.match(fn, /eq\('deposit_charged_at', booking.deposit_charged_at\)/);
   assert.match(fn, /Amount paid/);
   assert.match(fn, /Remaining balance/);
   assert.match(fn, /Signed at/);
-  assert.match(fn, /Airbnb confirmed/);
-  assert.match(fn, /collected by Airbnb/);
-  assert.match(fn, /isAirbnbLockedIn/);
+  assert.match(fn, /Booking confirmed/);
+  assert.match(fn, /Payment status: Deposit Paid/);
+  assert.match(fn, /isLockedIn/);
   assert.match(fn, /BOOKING_DESK_URL|bookingDeskUrl|skylarkbooking\.vercel\.app/);
+  assert.doesNotMatch(fn, /subjectPrefix: 'Airbnb confirmed'/);
+  assert.doesNotMatch(fn, /isAirbnbLockedIn/);
   assert.doesNotMatch(fn, /damage_notice/);
   assert.doesNotMatch(fn, /emailType/);
   const sendBlock = fn.slice(fn.indexOf('await sendEmail'), fn.indexOf('} catch (err)'));
@@ -113,13 +141,15 @@ test('original migration claims a dedup column and fires after deposit fields ch
   assert.doesNotMatch(migration, /damage_notice/);
 });
 
-test('follow-up migration notifies Airbnb on first confirmed insert, not hourly updates', () => {
+test('follow-up migration notifies on first confirmed insert, not hourly updates', () => {
   assert.match(followup, /AFTER INSERT OR UPDATE OF deposit_charged_at, status, source/);
   assert.match(followup, /OLD\.status IS DISTINCT FROM 'confirmed'/);
   assert.match(followup, /normalize_confirmed_payment_status/);
+  assert.doesNotMatch(followup, /source IS NOT DISTINCT FROM 'airbnb'/);
 });
 
-test('desk settings copy mentions deposit-paid and Airbnb confirmed notices', () => {
+test('desk settings copy mentions confirmed and deposit-paid notices', () => {
+  assert.match(desk, /booking-confirmed notices/);
   assert.match(desk, /deposit-paid notices/);
-  assert.match(desk, /Airbnb confirmed notices/);
+  assert.doesNotMatch(desk, /Airbnb confirmed notices/);
 });

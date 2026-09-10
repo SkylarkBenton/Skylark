@@ -1,10 +1,12 @@
--- Confirmed / Airbnb stays should not look unpaid, and the host should
--- get a Resend ping when an Airbnb reservation lands on the calendar.
+-- Confirmed / locked-in stays should not look unpaid, and the host
+-- should get a Resend ping when a website booking is confirmed or
+-- the deposit is paid. Airbnb confirmed uses the same rules.
 -- Does not invent a new payment_status string: only unpaid → deposit_paid.
 --
--- Why a BEFORE trigger: skylark-site sync-airbnb-ical / sync-airbnb-ts
--- upserts status=confirmed and payment_status=unpaid on every hourly pass.
--- Normalizing here survives that overwrite without a second mail provider.
+-- Website path Tim hit: approve-inquiry / desk convert sets
+-- status=confirmed and leaves payment_status=unpaid. Normalize here.
+-- Airbnb iCal also upserts confirmed+unpaid; same BEFORE trigger
+-- survives that hourly overwrite.
 
 CREATE OR REPLACE FUNCTION public.normalize_confirmed_payment_status()
 RETURNS trigger
@@ -23,13 +25,9 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  IF NEW.source IS NOT DISTINCT FROM 'airbnb'
-     AND NEW.status IS DISTINCT FROM 'pending' THEN
-    NEW.payment_status := 'deposit_paid';
-    RETURN NEW;
-  END IF;
-
-  IF NEW.deposit_charged_at IS NOT NULL OR COALESCE(NEW.amount_paid, 0) > 0 THEN
+  IF NEW.status IS NOT DISTINCT FROM 'confirmed'
+     OR NEW.deposit_charged_at IS NOT NULL
+     OR COALESCE(NEW.amount_paid, 0) > 0 THEN
     NEW.payment_status := 'deposit_paid';
   END IF;
 
@@ -44,9 +42,9 @@ CREATE TRIGGER trg_normalize_payment_status
   FOR EACH ROW
   EXECUTE FUNCTION public.normalize_confirmed_payment_status();
 
--- Host notify: keep the website deposit path, and also fire when an
--- Airbnb row first becomes confirmed (iCal insert or status flip).
--- Do not re-fire on the hourly iCal update of an already-confirmed row.
+-- Host notify: website confirm (approve / convert) and deposit paid.
+-- Also fires when any other source first becomes confirmed.
+-- Do not re-fire on hourly updates of an already-confirmed row.
 
 CREATE OR REPLACE FUNCTION public.request_host_paid_notification()
 RETURNS trigger
@@ -57,29 +55,17 @@ AS $$
 DECLARE
   should_notify boolean := false;
 BEGIN
-  IF NEW.host_paid_notified_at IS NOT NULL THEN
-    RETURN NEW;
+  -- Deposit just landed (null → set). May follow a confirm email.
+  IF NEW.deposit_charged_at IS NOT NULL
+     AND (TG_OP = 'INSERT' OR OLD.deposit_charged_at IS NULL)
+     AND NEW.host_paid_notified_at IS DISTINCT FROM NEW.deposit_charged_at THEN
+    should_notify := true;
   END IF;
 
-  IF NEW.source IS NOT DISTINCT FROM 'airbnb' THEN
-    IF NEW.status IS DISTINCT FROM 'confirmed' THEN
-      RETURN NEW;
-    END IF;
-    IF TG_OP = 'INSERT' THEN
-      should_notify := true;
-    ELSIF OLD.status IS DISTINCT FROM 'confirmed' OR OLD.source IS DISTINCT FROM 'airbnb' THEN
-      should_notify := true;
-    END IF;
-  ELSE
-    IF NEW.status IS DISTINCT FROM 'confirmed' THEN
-      RETURN NEW;
-    END IF;
-    IF NEW.deposit_charged_at IS NULL THEN
-      RETURN NEW;
-    END IF;
-    IF TG_OP = 'UPDATE' AND OLD.deposit_charged_at IS NOT NULL THEN
-      RETURN NEW;
-    END IF;
+  -- First confirmed (website approve/convert, or Airbnb insert).
+  IF NEW.status IS NOT DISTINCT FROM 'confirmed'
+     AND NEW.host_paid_notified_at IS NULL
+     AND (TG_OP = 'INSERT' OR OLD.status IS DISTINCT FROM 'confirmed') THEN
     should_notify := true;
   END IF;
 
@@ -116,3 +102,17 @@ CREATE TRIGGER trg_host_paid_notify
 
 REVOKE ALL ON FUNCTION public.normalize_confirmed_payment_status() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.request_host_paid_notification() FROM PUBLIC;
+
+-- Existing confirmed website rows (Sarah Shehane / Oct 24) still sit
+-- unpaid until the next write. Fix them once. Do not email the host
+-- for historical lock-ins; a later desk save of an un-notified row
+-- is the backfill path for the missed ping.
+UPDATE public.bookings
+SET payment_status = 'deposit_paid'
+WHERE COALESCE(payment_status, 'unpaid') = 'unpaid'
+  AND status IS DISTINCT FROM 'cancelled'
+  AND (
+    status IS NOT DISTINCT FROM 'confirmed'
+    OR deposit_charged_at IS NOT NULL
+    OR COALESCE(amount_paid, 0) > 0
+  );

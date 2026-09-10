@@ -351,7 +351,7 @@
       <label>Notification Email</label>
       <input type="email" id="s_notification_email" placeholder="you@email.com">
     </div>
-    <p style="font-size:12px;color:var(--muted);margin-top:-8px;">Where new inquiry alerts, deposit-paid notices, and Airbnb confirmed notices are sent.</p>
+    <p style="font-size:12px;color:var(--muted);margin-top:-8px;">Where new inquiry alerts, booking-confirmed notices, and deposit-paid notices are sent.</p>
 
     <div class="field">
       <label>Damage Hold Amount ($)</label>
@@ -427,15 +427,18 @@
 
   // Payment-status helpers — keep in sync with lib/payment-status.mjs
   // and lib/host-paid-email.mjs. Enum: unpaid | deposit_paid | paid_in_full | refunded.
+  // Confirmed / locked-in (website approve is the primary path) → Deposit Paid.
   function moneyReceived(booking){
     if(!booking) return false;
     if(booking.deposit_charged_at) return true;
     const paid = Number(booking.amount_paid);
     return Number.isFinite(paid) && paid > 0;
   }
-  function isAirbnbLockedIn(booking){
-    if(!booking || booking.source !== 'airbnb') return false;
-    return booking.status !== 'cancelled' && booking.status !== 'pending';
+  function isLockedIn(booking){
+    if(!booking) return false;
+    if(booking.status === 'cancelled' || booking.status === 'pending') return false;
+    if(booking.status === 'confirmed') return true;
+    return Boolean(booking.deposit_charged_at);
   }
   function inferredPaymentStatus(booking, overrides){
     const row = Object.assign({}, booking || {}, overrides || {});
@@ -443,18 +446,16 @@
     if(current === 'paid_in_full' || current === 'refunded' || current === 'deposit_paid') return current;
     if(current !== 'unpaid') return current;
     if(row.status === 'cancelled') return current;
-    if(isAirbnbLockedIn(row) || moneyReceived(row)) return 'deposit_paid';
+    if(isLockedIn(row) || moneyReceived(row)) return 'deposit_paid';
     return current;
   }
-  function alreadyNotifiedForDeposit(booking){
+  function alreadyNotifiedForLockIn(booking){
     if(!booking) return false;
-    if(isAirbnbLockedIn(booking)) return Boolean(booking.host_paid_notified_at);
-    return Boolean(booking.deposit_charged_at && booking.host_paid_notified_at === booking.deposit_charged_at);
+    if(booking.deposit_charged_at) return booking.host_paid_notified_at === booking.deposit_charged_at;
+    return Boolean(booking.host_paid_notified_at);
   }
   function isPaidCompletion(booking){
-    if(!booking) return false;
-    if(isAirbnbLockedIn(booking)) return true;
-    return Boolean(booking.deposit_charged_at);
+    return isLockedIn(booking);
   }
   function syncPaymentStatusFromSource(){
     const source = document.getElementById('f_source').value;
@@ -462,6 +463,7 @@
     const paidVal = document.getElementById('f_paid').value;
     const next = inferredPaymentStatus(currentBookingData, {
       source,
+      status: currentBookingData && currentBookingData.status,
       payment_status: pay.value,
       amount_paid: paidVal ? parseFloat(paidVal) : (currentBookingData && currentBookingData.amount_paid),
     });
@@ -726,14 +728,18 @@
       notes: document.getElementById('f_notes').value || null,
     };
 
-    payload.payment_status = inferredPaymentStatus(currentBookingData, {
-      source: payload.source,
-      payment_status: payload.payment_status,
-      amount_paid: payload.amount_paid,
-    });
+    if(pendingInquiryId){
+      payload.status = 'confirmed';
+    }
     if(payload.source === 'airbnb' && (!currentBookingData || currentBookingData.status !== 'cancelled')){
       payload.status = 'confirmed';
     }
+    payload.payment_status = inferredPaymentStatus(currentBookingData, {
+      source: payload.source,
+      status: payload.status || (currentBookingData && currentBookingData.status),
+      payment_status: payload.payment_status,
+      amount_paid: payload.amount_paid,
+    });
 
     if(!payload.event_date){ alert('Pick a date first.'); return; }
 
@@ -761,7 +767,7 @@
         deposit_charged_at: currentBookingData && currentBookingData.deposit_charged_at,
         host_paid_notified_at: currentBookingData && currentBookingData.host_paid_notified_at,
       };
-      if(isPaidCompletion(notifyBooking) && !alreadyNotifiedForDeposit(notifyBooking)){
+      if(isPaidCompletion(notifyBooking) && !alreadyNotifiedForLockIn(notifyBooking)){
         sb.functions.invoke('notify-host-paid', { body: { bookingId: savedId } }).catch(function(){});
       }
     }
