@@ -115,6 +115,6 @@ test('desk calendar uses event_date bounds like upcoming, not an end_date.or fil
   assert.match(desk, /\.gte\('event_date', lookback\)/);
   assert.match(desk, /\.lte\('event_date', monthEnd\)/);
   assert.doesNotMatch(desk, /or\(`end_date\.gte/);
-  assert.match(desk, /bookingCoversDay\(b, dateStr\)/);
+  assert.match(desk, /bookingCoversDay\(b, dateStr\) && showsOnDeskCalendar\(b\)/);
   assert.doesNotMatch(desk, /toISOString\(\)\.slice\(0,10\)/);
 });

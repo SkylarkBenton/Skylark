@@ -95,8 +95,10 @@ test('website confirm copy is the primary path; deposit copy includes amounts', 
   });
   assert.equal(sarah.subjectPrefix, 'Booking confirmed');
   assert.equal(sarah.includeAmounts, false);
-  assert.match(sarah.intro, /locked in on the booking desk/);
+  assert.match(sarah.intro, /confirmed on the booking desk/);
+  assert.match(sarah.intro, /Unpaid until a deposit is recorded/);
   assert.doesNotMatch(sarah.intro, /Airbnb/);
+  assert.doesNotMatch(sarah.intro, /Deposit Paid/);
 
   const deposit = hostNotifyCopy({
     source: 'website',
@@ -111,6 +113,7 @@ test('website confirm copy is the primary path; deposit copy includes amounts', 
   assert.equal(airbnb.subjectPrefix, 'Booking confirmed');
   assert.equal(airbnb.includeAmounts, false);
   assert.match(airbnb.intro, /\(Airbnb\)/);
+  assert.match(airbnb.intro, /collected by Airbnb/);
 });
 
 test('notify-host-paid emails settings.notification_email and dedups with a claim', () => {
@@ -123,7 +126,7 @@ test('notify-host-paid emails settings.notification_email and dedups with a clai
   assert.match(fn, /Remaining balance/);
   assert.match(fn, /Signed at/);
   assert.match(fn, /Booking confirmed/);
-  assert.match(fn, /Payment status: Deposit Paid/);
+  assert.match(fn, /Payment status: Unpaid until a deposit is recorded/);
   assert.match(fn, /isLockedIn/);
   assert.match(fn, /BOOKING_DESK_URL|bookingDeskUrl|skylarkbooking\.vercel\.app/);
   assert.doesNotMatch(fn, /subjectPrefix: 'Airbnb confirmed'/);

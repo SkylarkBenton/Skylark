@@ -167,6 +167,8 @@ test('desk cron invokes the edge function with the existing cron secret', () => 
   assert.match(cron, /Authorization: `Bearer \$\{ANON\}`/);
   assert.match(vercel, /\/api\/cron\/nudge-unsigned/);
   assert.match(vercel, /30 15 \* \* \*/);
+  assert.match(vercel, /\/calendar\.ics/);
+  assert.match(vercel, /\/api\/calendar/);
   assert.match(config, /nudge-unsigned-bookings/);
   assert.match(config, /verify_jwt = false/);
 });
