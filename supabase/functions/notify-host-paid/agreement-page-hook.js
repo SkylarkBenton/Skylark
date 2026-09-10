@@ -1,6 +1,7 @@
 // Intended client path for SkylarkBenton/skylark-site agreement.html.
 // Invoke only after save-agreement succeeds. Do not call on failure.
-// Dedup is deposit_charged_at — retries will not double-email the host.
+// Website/private dedup is deposit_charged_at. Airbnb lock-in is a
+// separate path (iCal insert / desk save) that claims host_paid_notified_at.
 //
 // const { data: saveData, error: saveErr } = await sb.functions.invoke('save-agreement', { ... });
 // if (saveErr || !saveData || saveData.error) { throw ... }
