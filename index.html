@@ -121,16 +121,36 @@
   }
   @media(min-width:600px){ .overlay{ align-items:center; } .sheet{ border-radius:20px; } }
   .sheet h3{ margin:0 0 18px; font-size:20px; }
-  .field{ margin-bottom:14px; }
-  .field label{ display:block; font-size:11px; letter-spacing:0.5px; text-transform:uppercase; color:var(--muted); margin-bottom:6px; }
+  .field{ margin-bottom:14px; display:flex; flex-direction:column; min-width:0; }
+  .field label{
+    display:block; font-size:11px; letter-spacing:0.5px; text-transform:uppercase;
+    color:var(--muted); margin-bottom:6px; min-height:1.35em; line-height:1.35em;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
   .field input, .field select, .field textarea{
     width:100%; background:var(--ink-2); border:1px solid var(--line); color:var(--cream);
     padding:10px 12px; border-radius:8px; font-family:inherit; font-size:14px;
+    box-sizing:border-box;
   }
-  .field textarea{ resize:vertical; min-height:60px; }
+  .field input, .field select{
+    height:44px; min-height:44px; line-height:normal;
+  }
+  .field textarea{ resize:vertical; min-height:60px; height:auto; }
+  .field input[type="date"]{
+    -webkit-appearance:none; appearance:none;
+    display:block; padding:0 12px;
+  }
+  .field input[type="date"]::-webkit-date-and-time-value{ text-align:left; margin:0; }
   .field input[type="date"]::-webkit-calendar-picker-indicator{ filter:invert(1); cursor:pointer; }
-  .row2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-  .row3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+  .field select{
+    -webkit-appearance:none; appearance:none;
+    background-color:var(--ink-2);
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path fill='%238C8C93' d='M1.2 1.2l4.8 4.8 4.8-4.8' stroke='%238C8C93' stroke-width='1.2' fill='none'/></svg>");
+    background-repeat:no-repeat; background-position:right 12px center; padding-right:32px;
+  }
+  .row2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; align-items:end; }
+  .row3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; align-items:end; }
+  .row3.date-source-row{ align-items:end; }
   .sheet-actions{ display:flex; gap:10px; margin-top:20px; }
   .btn{ flex:1; padding:12px; border-radius:10px; border:none; font-family:inherit; font-size:14px; font-weight:600; cursor:pointer; }
   .btn.primary{ background:var(--red); color:var(--ink); }
@@ -222,11 +242,11 @@
     <input type="hidden" id="bookingId">
     <input type="hidden" id="f_heard_about">
 
-    <div class="row3">
+    <div class="row3 date-source-row">
       <div class="field"><label>Date</label><input type="date" id="f_date" onchange="suggestRateFromDate()"></div>
       <div class="field"><label>End Date</label><input type="date" id="f_end_date"></div>
       <div class="field"><label>Source</label>
-        <select id="f_source">
+        <select id="f_source" onchange="syncPaymentStatusFromSource()">
           <option value="private">Private</option>
           <option value="airbnb">Airbnb</option>
           <option value="website">Website</option>
@@ -249,7 +269,7 @@
     <div class="row3">
       <div class="field"><label>Rate ($)</label><input type="number" id="f_rate" step="0.01"></div>
       <div class="field"><label>Deposit ($)</label><input type="number" id="f_deposit" step="0.01"></div>
-      <div class="field"><label>Paid ($)</label><input type="number" id="f_paid" step="0.01"></div>
+      <div class="field"><label>Paid ($)</label><input type="number" id="f_paid" step="0.01" onchange="syncPaymentStatusFromSource()"></div>
     </div>
 
     <div class="row2">
@@ -319,7 +339,7 @@
       <label>Notification Email</label>
       <input type="email" id="s_notification_email" placeholder="you@email.com">
     </div>
-    <p style="font-size:12px;color:var(--muted);margin-top:-8px;">Where new inquiry alerts and deposit-paid notices are sent.</p>
+    <p style="font-size:12px;color:var(--muted);margin-top:-8px;">Where new inquiry alerts, deposit-paid notices, and Airbnb confirmed notices are sent.</p>
 
     <div class="field">
       <label>Damage Hold Amount ($)</label>
@@ -343,6 +363,7 @@
   let currentMonth = new Date().getMonth();
   let currentYear = new Date().getFullYear();
   let bookingsCache = [];
+  let currentBookingData = null;
 
   // Date-only helpers — keep in sync with lib/booking-dates.mjs.
   // Never parse YYYY-MM-DD with `new Date('YYYY-MM-DD')` (UTC midnight
@@ -390,6 +411,49 @@
     if(dateVal && !rateField.value){
       rateField.value = priceForDate(dateVal);
     }
+  }
+
+  // Payment-status helpers — keep in sync with lib/payment-status.mjs
+  // and lib/host-paid-email.mjs. Enum: unpaid | deposit_paid | paid_in_full | refunded.
+  function moneyReceived(booking){
+    if(!booking) return false;
+    if(booking.deposit_charged_at) return true;
+    const paid = Number(booking.amount_paid);
+    return Number.isFinite(paid) && paid > 0;
+  }
+  function isAirbnbLockedIn(booking){
+    if(!booking || booking.source !== 'airbnb') return false;
+    return booking.status !== 'cancelled' && booking.status !== 'pending';
+  }
+  function inferredPaymentStatus(booking, overrides){
+    const row = Object.assign({}, booking || {}, overrides || {});
+    const current = row.payment_status || 'unpaid';
+    if(current === 'paid_in_full' || current === 'refunded' || current === 'deposit_paid') return current;
+    if(current !== 'unpaid') return current;
+    if(row.status === 'cancelled') return current;
+    if(isAirbnbLockedIn(row) || moneyReceived(row)) return 'deposit_paid';
+    return current;
+  }
+  function alreadyNotifiedForDeposit(booking){
+    if(!booking) return false;
+    if(isAirbnbLockedIn(booking)) return Boolean(booking.host_paid_notified_at);
+    return Boolean(booking.deposit_charged_at && booking.host_paid_notified_at === booking.deposit_charged_at);
+  }
+  function isPaidCompletion(booking){
+    if(!booking) return false;
+    if(isAirbnbLockedIn(booking)) return true;
+    return Boolean(booking.deposit_charged_at);
+  }
+  function syncPaymentStatusFromSource(){
+    const source = document.getElementById('f_source').value;
+    const pay = document.getElementById('f_paystatus');
+    const paidVal = document.getElementById('f_paid').value;
+    const next = inferredPaymentStatus(currentBookingData, {
+      source,
+      payment_status: pay.value,
+      amount_paid: paidVal ? parseFloat(paidVal) : (currentBookingData && currentBookingData.amount_paid),
+    });
+    if(pay.value === 'unpaid' && next === 'deposit_paid') pay.value = next;
   }
 
 
@@ -576,6 +640,7 @@
         dateLabel += ' – ' + dEnd.toLocaleDateString('en-US', {month:'short', day:'numeric'});
       }
       const sourceLabel = b.source.charAt(0).toUpperCase()+b.source.slice(1);
+      const payStatus = inferredPaymentStatus(b);
       return `<div class="booking-row" onclick='openBookingModal(${JSON.stringify(b)})'>
         <div class="b-left">
           <div class="b-date">${dateLabel}</div>
@@ -584,14 +649,12 @@
             <div class="b-sub">${sourceLabel}${b.event_type ? ' · '+b.event_type : ''}${b.guest_count ? ' · '+b.guest_count+' guests' : ''}</div>
           </div>
         </div>
-        <div class="badge ${b.payment_status}">${b.payment_status.replace(/_/g,' ')}</div>
+        <div class="badge ${payStatus}">${payStatus.replace(/_/g,' ')}</div>
       </div>`;
     }).join('');
   }
 
   // ---- MODAL ----
-  let currentBookingData = null;
-
   function openBookingModal(booking, defaultDate){
     currentBookingData = booking || null;
     document.getElementById('bookingOverlay').classList.add('open');
@@ -611,8 +674,9 @@
     document.getElementById('f_deposit').value = booking ? (booking.deposit_amount||'') : '';
     document.getElementById('f_paid').value = booking ? (booking.amount_paid||'') : '';
     document.getElementById('f_method').value = booking ? (booking.payment_method||'') : '';
-    document.getElementById('f_paystatus').value = booking ? booking.payment_status : 'unpaid';
+    document.getElementById('f_paystatus').value = booking ? inferredPaymentStatus(booking) : 'unpaid';
     document.getElementById('f_notes').value = booking ? (booking.notes||'') : '';
+    syncPaymentStatusFromSource();
 
     const canEmail = booking && booking.customer_email && booking.source !== 'airbnb';
 
@@ -650,20 +714,45 @@
       notes: document.getElementById('f_notes').value || null,
     };
 
+    payload.payment_status = inferredPaymentStatus(currentBookingData, {
+      source: payload.source,
+      payment_status: payload.payment_status,
+      amount_paid: payload.amount_paid,
+    });
+    if(payload.source === 'airbnb' && (!currentBookingData || currentBookingData.status !== 'cancelled')){
+      payload.status = 'confirmed';
+    }
+
     if(!payload.event_date){ alert('Pick a date first.'); return; }
 
     let error;
+    let savedId = id || null;
     if(id){
       ({ error } = await sb.from('bookings').update(payload).eq('id', id));
     } else {
       const { data: inserted, error: insertErr } = await sb.from('bookings').insert(payload).select().single();
       error = insertErr;
+      if(!error && inserted){ savedId = inserted.id; }
       if(!error && pendingInquiryId){
         await sb.from('inquiries').update({ status: 'converted', converted_booking_id: inserted.id }).eq('id', pendingInquiryId);
         pendingInquiryId = null;
       }
     }
     if(error){ alert('Could not save: ' + error.message); return; }
+    if(savedId){
+      const notifyBooking = {
+        id: savedId,
+        source: payload.source,
+        status: payload.status || (currentBookingData && currentBookingData.status),
+        payment_status: payload.payment_status,
+        amount_paid: payload.amount_paid,
+        deposit_charged_at: currentBookingData && currentBookingData.deposit_charged_at,
+        host_paid_notified_at: currentBookingData && currentBookingData.host_paid_notified_at,
+      };
+      if(isPaidCompletion(notifyBooking) && !alreadyNotifiedForDeposit(notifyBooking)){
+        sb.functions.invoke('notify-host-paid', { body: { bookingId: savedId } }).catch(function(){});
+      }
+    }
     closeModal();
     renderCalendar();
     renderInquiries();
