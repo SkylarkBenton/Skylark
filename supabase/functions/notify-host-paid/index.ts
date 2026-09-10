@@ -6,7 +6,7 @@ import { bookingDeskUrl, handleCors, json, serviceClient } from '../_shared/http
  * Host-only email when a stay is locked in. Website is the primary path:
  *   - status → confirmed (approve-inquiry / desk convert / desk save)
  *   - deposit_charged_at first set (save-agreement)
- * An Airbnb lock-in uses the same signal, not a separate product.
+ * Confirm copy does not claim Deposit Paid. Deposit mail includes amounts.
  * Guest-facing mail stays on save-agreement and is not touched here.
  *
  * Dedup on host_paid_notified_at:
@@ -91,11 +91,18 @@ function hostNotifyCopy(booking: Booking) {
       includeAmounts: true,
     };
   }
-  const source = booking.source === 'airbnb' ? ' (Airbnb)' : '';
+  if (booking.source === 'airbnb') {
+    return {
+      guest,
+      subjectPrefix: 'Booking confirmed',
+      intro: `<strong>${guest}</strong> is confirmed on the booking desk (Airbnb). Payment was collected by Airbnb.`,
+      includeAmounts: false,
+    };
+  }
   return {
     guest,
     subjectPrefix: 'Booking confirmed',
-    intro: `<strong>${guest}</strong> is locked in on the booking desk${source}. The stay is confirmed and shown as Deposit Paid.`,
+    intro: `<strong>${guest}</strong> is confirmed on the booking desk. Payment stays Unpaid until a deposit is recorded.`,
     includeAmounts: false,
   };
 }
@@ -196,7 +203,7 @@ Deno.serve(async (req) => {
           ${signedLabel ? `Signed at: ${signedLabel}<br>` : ''}`
     : booking.source === 'airbnb'
       ? 'Payment: collected by Airbnb<br>'
-      : 'Payment status: Deposit Paid<br>';
+      : 'Payment status: Unpaid until a deposit is recorded<br>';
 
   try {
     await sendEmail({
