@@ -4,4 +4,5 @@ project_id = "rywomhsgcaighcwnftoa"
 verify_jwt = true
 
 [functions.nudge-unsigned-bookings]
-verify_jwt = false
+# Gateway accepts the Vault secret key used by pg_cron; the function also checks it in code.
+verify_jwt = true

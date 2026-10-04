@@ -573,9 +573,10 @@
   }
 
   async function renderNeedsAttention(){
+    // Unpaid bookings now stay 'pending' until the deposit lands, so include both.
     const { data } = await sb.from('bookings')
       .select('*')
-      .eq('status', 'confirmed')
+      .in('status', ['pending', 'confirmed'])
       .in('source', ['private', 'website'])
       .is('agreement_signed_at', null)
       .gte('event_date', todayISO())

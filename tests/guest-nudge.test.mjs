@@ -126,22 +126,43 @@ test('guest copy matches existing voice and asks them to reply to cancel', () =>
   assert.match(html, /reply to this email/);
 });
 
-test('function claims nudge_sent_at, uses existing guest mail stack, and does not copy the host', () => {
-  assert.match(fn, /cronAuthorized/);
+test('function runs the day 1/3/7 follow-up sequence with one send per step', () => {
+  // Sequence + dedup table
+  assert.match(fn, /const STEPS = \[1, 3, 7\]/);
+  assert.match(fn, /booking_followups/);
+  assert.match(fn, /onConflict: 'booking_id,step'/);
+  assert.match(fn, /\.eq\('status', 'scheduled'\)\.select\('id'\)\.maybeSingle\(\)/); // atomic claim
+  // Stop conditions
+  assert.match(fn, /'signed_and_paid'/);
+  assert.match(fn, /'cancelled'/);
+  assert.match(fn, /'event_date_passed'/);
+  assert.match(fn, /'superseded'/);
+  // Still feeds the desk "Nudged" line and email_log
   assert.match(fn, /nudge_sent_at/);
-  assert.match(fn, /isNudgeEligible/);
-  assert.match(fn, /GUEST_REPLY_TO/);
-  assert.match(fn, /sendEmail/);
-  assert.match(fn, /wrapHtml/);
+  assert.match(fn, /followup_day\$\{row\.step\}/);
+  // Auth: Vault key via RPC (no key in source), service role, or CRON_SECRET
+  assert.match(fn, /verify_skylark_cron_key/);
+  assert.doesNotMatch(fn, /sb_secret_/);
+  assert.doesNotMatch(fn, /eyJhbGci/);
+  // Modes and link
   assert.match(fn, /dryRun/);
-  assert.match(fn, /agreementUrl/);
-  assert.match(shared, /agreement\.html\?token/);
-  assert.doesNotMatch(fn, /notification_email/);
+  assert.match(fn, /test_to must be the notification_email inbox/);
+  assert.match(fn, /agreement\.html\?token=/);
   assert.doesNotMatch(fn, /notify-host-paid/);
   assert.doesNotMatch(fn, /damage_notice/);
-  const sendBlock = fn.slice(fn.indexOf('await sendEmail'), fn.indexOf('sent.push'));
-  assert.doesNotMatch(sendBlock, /hostEmail/);
-  assert.match(http, /cronAuthorized/);
+  assert.doesNotMatch(fn, /door_code/);
+});
+
+test('follow-up migration: tracking table, pending-until-deposit, guard still holds pending dates', () => {
+  const m = readFileSync(
+    resolve(root, 'supabase/migrations/20261004150000_booking_followups_and_pending_until_deposit.sql'),
+    'utf8',
+  );
+  assert.match(m, /unique \(booking_id, step\)/);
+  assert.match(m, /trg_pending_until_deposit/);
+  assert.match(m, /b\.status <> 'cancelled'\s+-- pending holds the date/);
+  assert.match(m, /verify_skylark_cron_key/);
+  assert.doesNotMatch(m, /update public\.bookings/i);
 });
 
 test('shared nudge module and email helper reuse the existing ESP and reply-to', () => {
@@ -161,16 +182,20 @@ test('migration only adds the dedup column and does not email anyone', () => {
   assert.doesNotMatch(migration, /sarah/i);
 });
 
-test('desk cron invokes the edge function with the existing cron secret', () => {
+test('nudge runs from pg_cron (followups-daily), not a Vercel cron', () => {
+  const cronSql = readFileSync(
+    resolve(root, 'supabase/migrations/20261004150100_followups_cron_and_backfill.sql'),
+    'utf8',
+  );
+  assert.match(cronSql, /'followups-daily'/);
+  assert.match(cronSql, /'0 15 \* \* \*'/);
+  assert.match(cronSql, /vault\.decrypted_secrets where name = 'skylark_service_key'/);
+  // api/cron/nudge-unsigned.js stays as a manual trigger, but is no longer scheduled.
   assert.match(cron, /nudge-unsigned-bookings/);
-  assert.match(cron, /x-cron-secret/);
-  assert.match(cron, /Authorization: `Bearer \$\{ANON\}`/);
-  assert.match(vercel, /\/api\/cron\/nudge-unsigned/);
-  assert.match(vercel, /30 15 \* \* \*/);
+  assert.doesNotMatch(vercel, /\/api\/cron\/nudge-unsigned/);
   assert.match(vercel, /\/calendar\.ics/);
   assert.match(vercel, /\/api\/calendar/);
-  assert.match(config, /nudge-unsigned-bookings/);
-  assert.match(config, /verify_jwt = false/);
+  assert.match(config, /\[functions\.nudge-unsigned-bookings\]\n(#.*\n)?verify_jwt = true/);
 });
 
 test('desk surfaces the nudge without a host email', () => {
