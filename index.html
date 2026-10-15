@@ -246,6 +246,15 @@
 
 <button class="fab hidden" id="fabAdd" onclick="openBookingModal(null, todayISO())">+</button>
 
+<!-- Day picker: shown when a calendar day has more than one booking -->
+<div class="overlay" id="dayPickerOverlay">
+  <div class="sheet">
+    <button class="close-x" onclick="closeDayPicker()">✕</button>
+    <h3 id="dayPickerTitle">Bookings</h3>
+    <div id="dayPickerList"></div>
+  </div>
+</div>
+
 <!-- Booking modal -->
 <div class="overlay" id="bookingOverlay">
   <div class="sheet">
@@ -567,9 +576,56 @@
   function handleDayClick(dateStr){
     const locked = bookingsCache.filter(b => bookingCoversDay(b, dateStr) && showsOnDeskCalendar(b));
     const reserved = bookingsCache.filter(b => bookingCoversDay(b, dateStr));
-    if(locked.length >= 1){ openBookingModal(locked[0]); }
-    else if(reserved.length >= 1){ openBookingModal(reserved[0]); }
-    else { openBookingModal(null, dateStr); }
+    const list = locked.length ? locked : reserved;
+    if(list.length === 0){ openBookingModal(null, dateStr); return; }
+    if(list.length === 1){ openBookingModal(list[0]); return; }
+    openDayPicker(dateStr, list);
+  }
+
+  // A day with more than one booking (e.g. an Airbnb block plus a website
+  // event) used to open only the first one. Let the host pick instead.
+  let dayPickerBookings = [];
+  function fmtPickerTime(t){
+    if(!t) return '';
+    const [h, m] = String(t).split(':').map(Number);
+    if(Number.isNaN(h)) return '';
+    const ap = h >= 12 ? 'PM' : 'AM';
+    return `${((h + 11) % 12) + 1}:${String(m || 0).padStart(2,'0')} ${ap}`;
+  }
+  function escPicker(v){
+    return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function openDayPicker(dateStr, list){
+    dayPickerBookings = list;
+    const d = new Date(dateStr + 'T00:00:00');
+    document.getElementById('dayPickerTitle').textContent =
+      d.toLocaleDateString('en-US', {weekday:'long', month:'short', day:'numeric'}) + ` · ${list.length} bookings`;
+    document.getElementById('dayPickerList').innerHTML = list.map((b, i) => {
+      const { start, end } = bookingRange(b);
+      const span = start && end && start !== end
+        ? `${start.slice(5).replace('-','/')} – ${end.slice(5).replace('-','/')}` : '';
+      const time = [fmtPickerTime(b.start_time), fmtPickerTime(b.end_time)].filter(Boolean).join(' – ');
+      const sub = [b.source, time || span, b.event_type].filter(Boolean).join(' · ');
+      return `<div class="booking-row" onclick="pickDayBooking(${i})">
+        <div class="b-left">
+          <span class="dot ${escPicker(b.source)}"></span>
+          <div>
+            <div class="b-name">${escPicker(b.customer_name || '(no name yet)')}</div>
+            <div class="b-sub">${escPicker(sub)}</div>
+          </div>
+        </div>
+      </div>`;
+    }).join('') + `<div class="booking-row" onclick="closeDayPicker(); openBookingModal(null, '${dateStr}')">
+        <div class="b-left"><div class="b-name">+ New booking this day</div></div></div>`;
+    document.getElementById('dayPickerOverlay').classList.add('open');
+  }
+  function pickDayBooking(i){
+    const b = dayPickerBookings[i];
+    closeDayPicker();
+    if(b) openBookingModal(b);
+  }
+  function closeDayPicker(){
+    document.getElementById('dayPickerOverlay').classList.remove('open');
   }
 
   async function renderNeedsAttention(){
