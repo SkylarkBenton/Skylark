@@ -6,3 +6,6 @@ verify_jwt = true
 [functions.nudge-unsigned-bookings]
 # Gateway accepts the Vault secret key used by pg_cron; the function also checks it in code.
 verify_jwt = true
+
+[functions.refund-deposit]
+verify_jwt = true
