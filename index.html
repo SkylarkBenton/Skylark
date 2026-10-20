@@ -341,6 +341,7 @@
         </div>
       </div>
     </div>
+    <button class="btn danger hidden" id="refundDepositBtn" onclick="cancelAndRefundDeposit()" style="width:100%; margin-top:14px;">Cancel &amp; refund deposit</button>
   </div>
 </div>
 
@@ -774,6 +775,12 @@
     if(canEmail){
       renderAgreementStatus(booking);
     }
+
+    const refundBtn = document.getElementById('refundDepositBtn');
+    const canRefund = !!(booking && booking.deposit_charged_at && booking.status !== 'cancelled');
+    refundBtn.classList.toggle('hidden', !canRefund);
+    refundBtn.disabled = false;
+    refundBtn.textContent = 'Cancel & refund deposit';
   }
   function closeModal(){
     document.getElementById('bookingOverlay').classList.remove('open');
@@ -942,6 +949,7 @@
     }
     if(booking.stripe_payment_method_id){ lines.push('✓ Card on file'); }
     if(booking.deposit_charged_at){ lines.push('✓ Deposit charged ' + new Date(booking.deposit_charged_at).toLocaleDateString()); }
+    if(booking.deposit_refunded_at){ lines.push('✓ Deposit refunded ' + new Date(booking.deposit_refunded_at).toLocaleDateString()); }
     if(booking.balance_charged_at){ lines.push('✓ Balance charged ' + new Date(booking.balance_charged_at).toLocaleDateString()); }
     if(booking.damage_hold_placed_at && !booking.damage_hold_released_at){ lines.push('✓ $' + ((booking.damage_hold_amount_cents||0)/100).toFixed(2) + ' damage hold active'); }
     if(booking.damage_hold_released_at){ lines.push('✓ Damage hold released'); }
@@ -997,6 +1005,62 @@
     alert('Damage notice sent to guest.');
     closeModal();
     renderCalendar();
+  }
+
+  function formatRefundAmount(cents, currency){
+    const n = Number(cents);
+    if(!Number.isFinite(n)) return null;
+    const code = String(currency || 'usd').toUpperCase();
+    try {
+      return (n / 100).toLocaleString('en-US', { style: 'currency', currency: code });
+    } catch(e){
+      return (n / 100).toFixed(2) + ' ' + code;
+    }
+  }
+
+  async function cancelAndRefundDeposit(){
+    if(!currentBookingData || !currentBookingData.deposit_charged_at || currentBookingData.status === 'cancelled') return;
+    const btn = document.getElementById('refundDepositBtn');
+    btn.disabled = true;
+    btn.textContent = 'Looking up deposit...';
+    const { data, error } = await sb.functions.invoke('refund-deposit', {
+      body: { bookingId: currentBookingData.id }
+    });
+    if(error || !data || data.error){
+      alert('Could not look up the deposit: ' + await extractErrorMessage(error, data, 'unknown error'));
+      btn.disabled = false;
+      btn.textContent = 'Cancel & refund deposit';
+      return;
+    }
+    const amountLabel = formatRefundAmount(data.amount_cents, data.currency);
+    const name = data.customer_name || currentBookingData.customer_name || 'this guest';
+    if(!amountLabel){
+      alert('Stripe did not return a deposit amount.');
+      btn.disabled = false;
+      btn.textContent = 'Cancel & refund deposit';
+      return;
+    }
+    if(!confirm('Cancel ' + name + "'s booking and refund the " + amountLabel + ' deposit?')){
+      btn.disabled = false;
+      btn.textContent = 'Cancel & refund deposit';
+      return;
+    }
+    btn.textContent = 'Refunding...';
+    const { data: done, error: refundErr } = await sb.functions.invoke('refund-deposit', {
+      body: { bookingId: currentBookingData.id, confirm: true }
+    });
+    if(refundErr || !done || done.error){
+      alert('Could not refund: ' + await extractErrorMessage(refundErr, done, 'unknown error'));
+      btn.disabled = false;
+      btn.textContent = 'Cancel & refund deposit';
+      return;
+    }
+    const refundedLabel = formatRefundAmount(done.amount_cents, done.currency) || amountLabel;
+    const refundedName = done.customer_name || name;
+    alert('Cancelled ' + refundedName + "'s booking and refunded the " + refundedLabel + ' deposit.');
+    closeModal();
+    renderCalendar();
+    renderNeedsAttention();
   }
 
   async function chargeForDamage(){
