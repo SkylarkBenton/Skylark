@@ -17,6 +17,12 @@
 // role key, or CRON_SECRET (x-cron-secret / Bearer). No key lives in this source.
 //
 // Body options:
+// Auto-cancel: a WEBSITE request still 'pending' with nothing paid, no deposit and
+// no signed agreement is set to status 'cancelled' 3 days after its last reminder
+// (nudge_sent_at), once no follow-up is still scheduled. That frees the date and
+// keeps the row (a note is appended). Never touches other sources or anything
+// with money/deposit/signature. Rule mirrored in lib/stale-request.mjs.
+//
 //   { "dryRun": true }              -> report what would be enrolled/sent; writes nothing.
 //   { "test_to": "<notification_email>" } -> sends all three emails with sample data and
 //                                    a dummy link to the Skylark inbox only; writes nothing.
@@ -68,6 +74,46 @@ type Booking = {
 
 const BOOKING_COLS =
   'id, source, status, customer_name, customer_email, event_date, end_date, rate, agreement_token, agreement_sent_at, agreement_signed_at, deposit_charged_at, amount_paid, payment_status, created_at';
+
+const AUTO_CANCEL_GRACE_DAYS = 3;
+
+// Keep in sync with lib/stale-request.mjs.
+export function shouldAutoCancel(b: any, followups: any[] = [], now = new Date()) {
+  if (!b) return false;
+  if (b.source !== 'website' || b.status !== 'pending') return false;
+  if (b.agreement_signed_at) return false;
+  if (b.deposit_charged_at || b.deposit_authorized_at || b.deposit_captured_at) return false;
+  if (Number(b.amount_paid || 0) > 0) return false;
+  if (b.payment_status && b.payment_status !== 'unpaid') return false;
+  if (!b.nudge_sent_at) return false;
+  const nudged = new Date(b.nudge_sent_at).getTime();
+  if (!Number.isFinite(nudged) || now.getTime() - nudged < AUTO_CANCEL_GRACE_DAYS * DAY_MS) return false;
+  if ((followups || []).some((f) => f.status === 'scheduled' || f.status === 'sending')) return false;
+  return true;
+}
+
+const STALE_COLS =
+  'id, source, status, event_date, notes, nudge_sent_at, agreement_signed_at, deposit_charged_at, deposit_authorized_at, deposit_captured_at, amount_paid, payment_status';
+
+async function findStaleRequests(sb: any, now: Date) {
+  const cutoff = new Date(now.getTime() - AUTO_CANCEL_GRACE_DAYS * DAY_MS).toISOString();
+  const { data: rows, error } = await sb.from('bookings').select(STALE_COLS)
+    .eq('source', 'website').eq('status', 'pending')
+    .is('agreement_signed_at', null).is('deposit_charged_at', null)
+    .not('nudge_sent_at', 'is', null).lte('nudge_sent_at', cutoff).limit(200);
+  if (error) throw new Error(`stale lookup: ${error.message}`);
+  const ids = (rows || []).map((b: any) => b.id);
+  const fuByBooking = new Map<string, any[]>();
+  if (ids.length) {
+    const { data: fus } = await sb.from('booking_followups').select('booking_id, status').in('booking_id', ids);
+    (fus || []).forEach((f: any) => {
+      const l = fuByBooking.get(f.booking_id) || [];
+      l.push(f);
+      fuByBooking.set(f.booking_id, l);
+    });
+  }
+  return (rows || []).filter((b: any) => shouldAutoCancel(b, fuByBooking.get(b.id) || [], now));
+}
 
 export function isPaid(b: Booking) {
   return Boolean(b.deposit_charged_at) ||
@@ -302,9 +348,15 @@ Deno.serve(async (req) => {
       .forEach((r) => upcoming.push({ booking_id: bid, step: r.step, due_at: r.due_at, to: b!.customer_email }));
   }
 
+  let stale: any[] = [];
+  try { stale = await findStaleRequests(sb, now); } catch (err) {
+    report.auto_cancel_error = err instanceof Error ? err.message : String(err);
+  }
+
   if (dryRun) {
     return json({
       ...report, ok: true,
+      would_auto_cancel: stale.map((b) => ({ booking_id: b.id, event_date: b.event_date, nudge_sent_at: b.nudge_sent_at })),
       would_send: toSend.map(({ row, booking }) => ({ booking_id: booking.id, step: row.step, to: booking.customer_email, event_date: booking.event_date })),
       would_skip: [...stopped, ...superseded.map((s) => ({ ...s, reason: 'superseded' }))],
       upcoming,
@@ -348,9 +400,25 @@ Deno.serve(async (req) => {
     }
   }
 
+  // ---- 4) Auto-cancel stale website requests (guarded update: still unpaid/unsigned) ----
+  const autoCancelled: any[] = [];
+  for (const b of stale) {
+    const note = `Auto-cancelled ${today}: no deposit or signed agreement ${AUTO_CANCEL_GRACE_DAYS} days after the last reminder.`;
+    const { data: done, error } = await sb.from('bookings')
+      .update({ status: 'cancelled', notes: b.notes ? `${b.notes}\n${note}` : note })
+      .eq('id', b.id).eq('source', 'website').eq('status', 'pending')
+      .is('agreement_signed_at', null).is('deposit_charged_at', null).is('deposit_authorized_at', null)
+      .select('id').maybeSingle();
+    if (error) { failures.push({ booking_id: b.id, step: 'auto_cancel', error: error.message }); continue; }
+    if (!done) continue;
+    await sb.from('booking_followups').update({ status: 'skipped', skip_reason: 'auto_cancelled', updated_at: new Date().toISOString() })
+      .eq('booking_id', b.id).eq('status', 'scheduled');
+    autoCancelled.push({ booking_id: b.id, event_date: b.event_date });
+  }
+
   return json({
     ...report, ok: failures.length === 0,
-    sent, failures,
+    sent, failures, auto_cancelled: autoCancelled,
     skipped: [...stopped, ...superseded.map((s) => ({ ...s, reason: 'superseded' }))],
     upcoming,
   });
