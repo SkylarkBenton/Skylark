@@ -116,6 +116,7 @@
   .overlay{ position:fixed; inset:0; background:rgba(10,12,22,0.6); display:none; align-items:flex-end; justify-content:center; z-index:30; }
   .overlay.open{ display:flex; }
   .sheet{
+    position:relative;
     background:var(--ink-3); border:1px solid var(--line); border-radius:20px 20px 0 0;
     width:100%; max-width:520px; max-height:88vh; overflow-y:auto; padding:22px 20px 30px;
   }
@@ -168,6 +169,9 @@
   .btn.primary{ background:var(--red); color:var(--ink); }
   .btn.ghost{ background:transparent; border:1px solid var(--line); color:var(--cream); }
   .btn.danger{ background:transparent; border:1px solid var(--danger); color:#F0938F; }
+  .view-row{ display:flex; gap:12px; padding:10px 0; border-bottom:1px solid var(--line); font-size:14px; }
+  .view-k{ flex:0 0 110px; color:var(--muted); font-size:11px; letter-spacing:0.5px; text-transform:uppercase; padding-top:2px; }
+  .view-v{ flex:1; color:var(--cream); white-space:pre-wrap; word-break:break-word; text-transform:none; }
   .close-x{ position:absolute; top:16px; right:16px; background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer; }
 
   /* Login */
@@ -249,9 +253,22 @@
 <!-- Day picker: shown when a calendar day has more than one booking -->
 <div class="overlay" id="dayPickerOverlay">
   <div class="sheet">
-    <button class="close-x" onclick="closeDayPicker()">✕</button>
+    <button class="close-x" aria-label="Close" onclick="closeDayPicker()">✕</button>
     <h3 id="dayPickerTitle">Bookings</h3>
     <div id="dayPickerList"></div>
+  </div>
+</div>
+
+<!-- Booking view (read-only). Edit opens the booking modal below. -->
+<div class="overlay" id="bookingViewOverlay">
+  <div class="sheet">
+    <button class="close-x" aria-label="Close" onclick="closeBookingView()">✕</button>
+    <h3 id="viewTitle">Booking</h3>
+    <div id="viewBody"></div>
+    <div class="sheet-actions">
+      <button class="btn ghost" onclick="closeBookingView()">Close</button>
+      <button class="btn primary" id="viewEditBtn" onclick="editFromView()">Edit</button>
+    </div>
   </div>
 </div>
 
@@ -409,8 +426,49 @@
   }
   function bookingRange(b){
     const start = dateOnly(b && b.event_date);
-    const end = dateOnly(b && b.end_date) || start;
+    let end = dateOnly(b && b.end_date) || start;
+    // sync-airbnb stores iCal DTEND (checkout day, exclusive). Paint nights only.
+    if(isAirbnbFeedRow(b) && end > start) end = addDaysISO(end, -1);
     return { start, end };
+  }
+
+  // Airbnb iCal helpers — keep in sync with lib/airbnb-stays.mjs.
+  // Airbnb imports our /api/calendar feed, so each website/private booking
+  // comes back as an "Airbnb (Not available)" block. Hide those echoes.
+  function isAirbnbFeedRow(b){
+    return Boolean(b && b.source === 'airbnb' && b.airbnb_uid);
+  }
+  function isAirbnbBlock(b){
+    return Boolean(b && b.source === 'airbnb'
+      && String(b.customer_name || '').trim().toLowerCase() === 'airbnb (blocked dates)');
+  }
+  function isEchoBlock(block, bookings){
+    if(!isAirbnbBlock(block)) return false;
+    const r = bookingRange(block);
+    return (bookings || []).some(o => {
+      if(!o || (o.source !== 'website' && o.source !== 'private') || o.status === 'cancelled') return false;
+      const s = dateOnly(o.event_date);
+      const e = dateOnly(o.end_date) || s;
+      return s && s <= r.end && e >= r.start;
+    });
+  }
+  function dedupeAirbnbEchoes(bookings){
+    return (bookings || []).filter(b => !isEchoBlock(b, bookings));
+  }
+  function countsAsBooking(b){ return Boolean(b) && !isAirbnbBlock(b); }
+  // Airbnb guest stays: priced per night with the weekend/weekday rule.
+  function bookingRevenueInMonth(b, monthStart, monthEnd){
+    if(!b || b.status === 'cancelled') return 0;
+    if(b.source !== 'airbnb') return Number(b.rate) || 0;
+    if(isAirbnbBlock(b)) return 0;
+    const { start, end } = bookingRange(b);
+    if(!start) return 0;
+    const nights = [];
+    for(let d = start; d <= end; d = addDaysISO(d, 1)) nights.push(d);
+    const inMonth = nights.filter(d => d >= monthStart && d <= monthEnd);
+    const rate = Number(b.rate) || 0;
+    if(rate > 0) return nights.length ? Math.round((rate * inMonth.length / nights.length) * 100) / 100 : 0;
+    return inMonth.reduce((sum, d) => sum + priceForDate(d), 0);
   }
   function bookingCoversDay(b, dateStr){
     const { start, end } = bookingRange(b);
@@ -554,7 +612,7 @@
       .order('event_date');
 
     if(error){ console.error('Calendar bookings query failed', error); }
-    bookingsCache = (data || []).filter(b => bookingOverlapsMonth(b, monthStart, monthEnd));
+    bookingsCache = dedupeAirbnbEchoes(data || []).filter(b => bookingOverlapsMonth(b, monthStart, monthEnd));
     const grid = document.getElementById('calGrid');
     let html = '';
     for(let i=0;i<firstDay;i++){ html += `<div class="cal-day empty"></div>`; }
@@ -579,7 +637,7 @@
     const reserved = bookingsCache.filter(b => bookingCoversDay(b, dateStr));
     const list = locked.length ? locked : reserved;
     if(list.length === 0){ openBookingModal(null, dateStr); return; }
-    if(list.length === 1){ openBookingModal(list[0]); return; }
+    if(list.length === 1){ openBookingView(list[0]); return; }
     openDayPicker(dateStr, list);
   }
 
@@ -617,13 +675,14 @@
         </div>
       </div>`;
     }).join('') + `<div class="booking-row" onclick="closeDayPicker(); openBookingModal(null, '${dateStr}')">
-        <div class="b-left"><div class="b-name">+ New booking this day</div></div></div>`;
+        <div class="b-left"><div class="b-name">+ New booking this day</div></div></div>
+      <div class="sheet-actions"><button class="btn ghost" onclick="closeDayPicker()">Close</button></div>`;
     document.getElementById('dayPickerOverlay').classList.add('open');
   }
   function pickDayBooking(i){
     const b = dayPickerBookings[i];
     closeDayPicker();
-    if(b) openBookingModal(b);
+    if(b) openBookingView(b);
   }
   function closeDayPicker(){
     document.getElementById('dayPickerOverlay').classList.remove('open');
@@ -655,7 +714,7 @@
         const nudged = new Date(b.nudge_sent_at).toLocaleDateString('en-US', {month:'short', day:'numeric'});
         statusText = 'Nudged ' + nudged + ' — still awaiting signature';
       }
-      return `<div class="booking-row" onclick='openBookingModal(${JSON.stringify(b)})'>
+      return `<div class="booking-row" onclick='openBookingView(${JSON.stringify(b).replace(/'/g, "&#39;")})'>
         <div class="b-left">
           <div class="b-date" style="${urgent ? 'color:var(--red-lt);' : ''}">${dateLabel}</div>
           <div>
@@ -680,8 +739,10 @@
     // Needs Attention still list reserved-but-unlocked rows.
     const monthBookings = bookingsCache.filter(showsOnDeskCalendar);
 
-    const revenue = monthBookings.reduce((sum, b) => sum + (Number(b.rate) || 0), 0);
-    const count = monthBookings.length;
+    // Airbnb guest stays count at $500 Fri/Sat/Sun nights, $350 Mon-Thu,
+    // per night inside this month. Airbnb "blocked dates" are not revenue.
+    const revenue = monthBookings.reduce((sum, b) => sum + bookingRevenueInMonth(b, monthStart, monthEnd), 0);
+    const count = monthBookings.filter(countsAsBooking).length;
 
     // Occupied days: locked-in stays only, matching the painted dots.
     let occupiedDays = 0;
@@ -693,7 +754,7 @@
     const occupancyPct = daysInMonth > 0 ? Math.round((occupiedDays / daysInMonth) * 100) : 0;
 
     const bySource = { airbnb: 0, private: 0, website: 0 };
-    monthBookings.forEach(b => { if(bySource[b.source] !== undefined) bySource[b.source]++; });
+    monthBookings.filter(countsAsBooking).forEach(b => { if(bySource[b.source] !== undefined) bySource[b.source]++; });
 
     const heardAboutTally = {};
     monthBookings.forEach(b => {
@@ -731,7 +792,7 @@
       }
       const sourceLabel = b.source.charAt(0).toUpperCase()+b.source.slice(1);
       const payStatus = inferredPaymentStatus(b);
-      return `<div class="booking-row" onclick='openBookingModal(${JSON.stringify(b)})'>
+      return `<div class="booking-row" onclick='openBookingView(${JSON.stringify(b).replace(/'/g, "&#39;")})'>
         <div class="b-left">
           <div class="b-date">${dateLabel}</div>
           <div>
@@ -743,6 +804,78 @@
       </div>`;
     }).join('');
   }
+
+  // ---- VIEW (read-only) ----
+  let viewBooking = null;
+  function fmtViewDate(iso){
+    if(!iso) return '';
+    return new Date(iso + 'T00:00:00').toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric', year:'numeric'});
+  }
+  function fmtMoney(v){
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? '$' + n.toLocaleString(undefined, {maximumFractionDigits:2}) : '';
+  }
+  function openBookingView(booking){
+    if(!booking){ return; }
+    viewBooking = booking;
+    const { start, end } = bookingRange(booking);
+    const dates = start && end && end !== start ? `${fmtViewDate(start)} – ${fmtViewDate(end)}` : fmtViewDate(start);
+    const time = [fmtPickerTime(booking.start_time), fmtPickerTime(booking.end_time)].filter(Boolean).join(' – ');
+    const pay = inferredPaymentStatus(booking);
+    let rate = fmtMoney(booking.rate);
+    if(!rate && booking.source === 'airbnb' && !isAirbnbBlock(booking)){
+      const est = bookingRevenueInMonth(booking, '0000-01-01', '9999-12-31');
+      if(est) rate = '$' + est.toLocaleString() + ' (est. $500 weekend / $350 weekday nights)';
+    }
+    const signed = booking.agreement_signed_at ? 'Signed ' + new Date(booking.agreement_signed_at).toLocaleDateString('en-US', {month:'short', day:'numeric'})
+      : (booking.agreement_sent_at ? 'Sent, not signed yet' : '');
+    const rows = [
+      ['Dates', dates],
+      ['Time', time],
+      ['Source', booking.source ? booking.source.charAt(0).toUpperCase() + booking.source.slice(1) : ''],
+      ['Status', booking.status],
+      ['Event', booking.event_type],
+      ['Guests', booking.guest_count],
+      ['Phone', booking.customer_phone],
+      ['Email', booking.customer_email],
+      ['Rate', rate],
+      ['Deposit', fmtMoney(booking.deposit_amount)],
+      ['Paid', fmtMoney(booking.amount_paid)],
+      ['Payment', pay ? pay.replace(/_/g,' ') : ''],
+      ['Method', booking.payment_method],
+      ['Agreement', signed],
+      ['Heard about', booking.heard_about],
+      ['Notes', booking.notes],
+    ].filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== '');
+    document.getElementById('viewTitle').textContent = booking.customer_name || '(no name yet)';
+    document.getElementById('viewBody').innerHTML = rows.map(([k, v]) => `<div class="view-row">
+        <div class="view-k">${escPicker(k)}</div><div class="view-v">${escPicker(v)}</div></div>`).join('');
+    document.getElementById('bookingViewOverlay').classList.add('open');
+  }
+  function closeBookingView(){
+    document.getElementById('bookingViewOverlay').classList.remove('open');
+    viewBooking = null;
+  }
+  function editFromView(){
+    const b = viewBooking;
+    closeBookingView();
+    if(b) openBookingModal(b);
+  }
+
+  // Tap the dark backdrop (outside a sheet) to dismiss any overlay.
+  const OVERLAY_CLOSERS = {
+    dayPickerOverlay: () => closeDayPicker(),
+    bookingViewOverlay: () => closeBookingView(),
+  };
+  Object.keys(OVERLAY_CLOSERS).forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.addEventListener('click', e => { if(e.target === el) OVERLAY_CLOSERS[id](); });
+  });
+  document.addEventListener('keydown', e => {
+    if(e.key !== 'Escape') return;
+    if(document.getElementById('bookingViewOverlay').classList.contains('open')) closeBookingView();
+    else if(document.getElementById('dayPickerOverlay').classList.contains('open')) closeDayPicker();
+  });
 
   // ---- MODAL ----
   function openBookingModal(booking, defaultDate){
